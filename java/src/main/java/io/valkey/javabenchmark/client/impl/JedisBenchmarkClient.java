@@ -53,6 +53,14 @@ public class JedisBenchmarkClient implements BenchmarkClient {
     }
 
     @Override
+    public String getDriverVersion() {
+        // Get Jedis version from package implementation version
+        Package pkg = Jedis.class.getPackage();
+        String version = pkg != null ? pkg.getImplementationVersion() : null;
+        return version != null ? version : "unknown";
+    }
+
+    @Override
     public void connect(String host, int port, DriverConfig driverConfig) throws ClientException {
         logger.info("Connecting Jedis to {}:{} (cluster={})", host, port, driverConfig.isClusterMode());
         

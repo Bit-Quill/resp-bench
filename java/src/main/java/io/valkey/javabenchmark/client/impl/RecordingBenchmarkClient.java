@@ -90,6 +90,9 @@ public class RecordingBenchmarkClient implements BenchmarkClient {
     public String getDescription() { return "Recording client for testing"; }
 
     @Override
+    public String getDriverVersion() { return "1.0.0"; }
+
+    @Override
     public void connect(String host, int port, DriverConfig driverConfig) {
         this.connectTime = System.currentTimeMillis();
         this.connected = true;

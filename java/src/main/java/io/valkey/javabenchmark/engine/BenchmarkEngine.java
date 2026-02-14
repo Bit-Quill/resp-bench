@@ -46,14 +46,24 @@ public class BenchmarkEngine {
     private final DriverConfig driverConfig;
     private final WorkloadConfig workloadConfig;
     private final NdjsonMetricsWriter metricsWriter;
+    private final String commitId;
+    
+    // Client reference for version info
+    private BenchmarkClient sampleClient;
 
     public BenchmarkEngine(String host, int port, DriverConfig driverConfig,
                           WorkloadConfig workloadConfig, String metricsPath) {
+        this(host, port, driverConfig, workloadConfig, metricsPath, null);
+    }
+
+    public BenchmarkEngine(String host, int port, DriverConfig driverConfig,
+                          WorkloadConfig workloadConfig, String metricsPath, String commitId) {
         this.host = host;
         this.port = port;
         this.driverConfig = driverConfig;
         this.workloadConfig = workloadConfig;
         this.metricsWriter = new NdjsonMetricsWriter(metricsPath);
+        this.commitId = commitId;
     }
 
     public void run() throws Exception {
@@ -61,11 +71,46 @@ public class BenchmarkEngine {
         logger.info("Driver: {}, Mode: {}", driverConfig.getDriverId(), driverConfig.getMode());
         logger.info("Server: {}:{}", host, port);
 
+        // Set up metadata using a sample client to get version info
+        setupMetadata();
+
         for (PhaseConfig phase : workloadConfig.getPhases()) {
             executePhase(phase);
         }
 
         logger.info("Benchmark completed");
+    }
+
+    /**
+     * Set up metadata for metrics output, including driver versions.
+     */
+    private void setupMetadata() {
+        try {
+            // Create a temporary client to get version info
+            sampleClient = BenchmarkClientFactory.createAndConnect(host, port, driverConfig);
+            
+            String driverId = driverConfig.getDriverId();
+            String primaryVersion = sampleClient.getDriverVersion();
+            String secondaryDriverId = driverConfig.getSecondaryDriverId();
+            String secondaryVersion = null;
+            
+            // For spring-data-* drivers, we would need to get the underlying driver version
+            // For now, we record the secondary driver ID if present
+            
+            metricsWriter.setMetadata(commitId, driverId, primaryVersion, secondaryDriverId, secondaryVersion);
+            
+            logger.info("Metadata: commit={}, driver={}, version={}", 
+                        commitId != null ? commitId : "N/A", driverId, primaryVersion);
+            
+            // Close the sample client
+            sampleClient.close();
+            sampleClient = null;
+        } catch (Exception e) {
+            logger.warn("Failed to get driver version for metadata: {}", e.getMessage());
+            // Still set basic metadata
+            metricsWriter.setMetadata(commitId, driverConfig.getDriverId(), "unknown", 
+                                     driverConfig.getSecondaryDriverId(), null);
+        }
     }
 
     private void executePhase(PhaseConfig phase) throws Exception {

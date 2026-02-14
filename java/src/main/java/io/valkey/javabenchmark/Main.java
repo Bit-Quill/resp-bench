@@ -36,8 +36,12 @@ public class Main implements Callable<Integer> {
     private String workloadConfig;
 
     @Option(names = {"-m", "--metrics"}, required = true,
-            description = "Path for metrics CSV output")
+            description = "Path for metrics NDJSON output")
     private String metricsPath;
+
+    @Option(names = {"--commit-id"},
+            description = "Git commit ID for metadata (optional)")
+    private String commitId;
 
     @Option(names = {"--info"},
             description = "Show supported drivers and commands")
@@ -60,7 +64,7 @@ public class Main implements Callable<Integer> {
         WorkloadConfig workload = ConfigLoader.loadWorkloadConfig(workloadConfig);
 
         // Create and run engine
-        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsPath);
+        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsPath, commitId);
         engine.run();
 
         return 0;

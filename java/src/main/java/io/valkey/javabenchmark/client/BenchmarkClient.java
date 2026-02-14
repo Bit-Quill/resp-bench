@@ -50,6 +50,13 @@ public interface BenchmarkClient extends AutoCloseable {
     String getDescription();
 
     /**
+     * Get the driver library version.
+     * 
+     * @return the version string (e.g., "5.2.0")
+     */
+    String getDriverVersion();
+
+    /**
      * Initialize and connect to the server.
      * 
      * @param host server host

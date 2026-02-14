@@ -52,6 +52,14 @@ public class ValkeyGlideBenchmarkClient implements BenchmarkClient {
     }
 
     @Override
+    public String getDriverVersion() {
+        // Get Valkey GLIDE version from package implementation version
+        Package pkg = GlideClient.class.getPackage();
+        String version = pkg != null ? pkg.getImplementationVersion() : null;
+        return version != null ? version : "unknown";
+    }
+
+    @Override
     public void connect(String host, int port, DriverConfig driverConfig) throws ClientException {
         logger.info("Connecting ValkeyGlide to {}:{} (cluster={})", host, port, driverConfig.isClusterMode());
         

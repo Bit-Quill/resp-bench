@@ -1,0 +1,158 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_benchmark:
+        description: 'Run benchmark'
+        required: false
+        default: 'true'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        driver: 
+          - configs/drivers/reference/jedis.json
+          - configs/drivers/reference/lettuce.json
+          - configs/drivers/reference/redisson.json
+          - configs/drivers/reference/spring-data-redis-jedis.json
+          - configs/drivers/reference/spring-data-redis-lettuce.json
+        workload:
+          - configs/workloads/reference/basic-standalone-single-client.json
+          - configs/workloads/reference/basic-standalone-100-clients.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Start Valkey server
+        run: |
+          # Use Makefile target which builds from source and configures with persistence disabled
+          make server-standalone-start
+          # Wait for server to be ready
+          sleep 2
+          # Verify server is up and persistence is disabled
+          work/valkey/bin/valkey-cli ping
+          work/valkey/bin/valkey-cli CONFIG GET save
+
+      - name: Build Java benchmark
+        run: |
+          cd java
+          mvn -B package -DskipTests
+
+      - name: Extract names for result file
+        id: names
+        run: |
+          DRIVER_NAME=$(basename ${{ matrix.driver }} .json)
+          WORKLOAD_NAME=$(basename ${{ matrix.workload }} .json)
+          echo "driver_name=$DRIVER_NAME" >> $GITHUB_OUTPUT
+          echo "workload_name=$WORKLOAD_NAME" >> $GITHUB_OUTPUT
+          echo "result_file=results/github-runner/reference/${DRIVER_NAME}-${WORKLOAD_NAME}.ndjson" >> $GITHUB_OUTPUT
+
+      - name: Run benchmark
+        run: |
+          mkdir -p results/github-runner/reference
+          java -jar java/target/java-benchmark-1.0-SNAPSHOT.jar \
+            --server localhost:6379 \
+            --driver ${{ matrix.driver }} \
+            --workload ${{ matrix.workload }} \
+            --metrics ${{ steps.names.outputs.result_file }} \
+            --commit-id ${{ github.sha }}
+
+      - name: Stop Valkey server
+        if: always()
+        run: |
+          make server-standalone-stop || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ steps.names.outputs.driver_name }}-${{ steps.names.outputs.workload_name }}
+          path: ${{ steps.names.outputs.result_file }}
+          retention-days: 30
+
+  generate-graphs:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install matplotlib numpy
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: results/github-runner/reference
+          pattern: benchmark-*
+          merge-multiple: true
+
+      - name: List downloaded results
+        run: |
+          echo "Downloaded results:"
+          find results -name "*.ndjson" -type f
+
+      - name: Generate graphs - Single Client
+        run: |
+          python scripts/generate_graphs.py \
+            --results "results/github-runner/reference/*-basic-standalone-single-client.ndjson" \
+            --output graphs/single-client/ \
+            --phase STEADY \
+            --workload "Single Client"
+
+      - name: Generate graphs - 100 Clients
+        run: |
+          python scripts/generate_graphs.py \
+            --results "results/github-runner/reference/*-basic-standalone-100-clients.ndjson" \
+            --output graphs/100-clients/ \
+            --phase STEADY \
+            --workload "100 Clients"
+
+      - name: Upload graphs
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-graphs
+          path: graphs/
+          retention-days: 30
+
+      - name: Create PR with updated graphs
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "Update benchmark graphs"
+          title: "🔄 Update benchmark graphs"
+          body: |
+            This PR updates the benchmark comparison graphs from the latest CI run.
+            
+            Commit: ${{ github.sha }}
+            Run: ${{ github.run_id }}
+          branch: update-benchmark-graphs
+          delete-branch: true
+          add-paths: |
+            graphs/

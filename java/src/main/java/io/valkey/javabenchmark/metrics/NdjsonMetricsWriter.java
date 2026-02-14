@@ -31,11 +31,36 @@ public class NdjsonMetricsWriter {
     
     private final Path outputPath;
     private final ObjectMapper objectMapper;
+    
+    // Metadata fields
+    private String commitId;
+    private String driverId;
+    private String primaryDriverVersion;
+    private String secondaryDriverId;
+    private String secondaryDriverVersion;
 
     public NdjsonMetricsWriter(String path) {
         this.outputPath = Path.of(path);
         this.objectMapper = new ObjectMapper();
         // No pretty printing - NDJSON requires compact single-line JSON
+    }
+
+    /**
+     * Set metadata for the benchmark run.
+     * 
+     * @param commitId the git commit ID of the benchmark code
+     * @param driverId the primary driver ID
+     * @param primaryDriverVersion the primary driver version
+     * @param secondaryDriverId the secondary driver ID (for spring-data-* drivers)
+     * @param secondaryDriverVersion the secondary driver version
+     */
+    public void setMetadata(String commitId, String driverId, String primaryDriverVersion,
+                           String secondaryDriverId, String secondaryDriverVersion) {
+        this.commitId = commitId;
+        this.driverId = driverId;
+        this.primaryDriverVersion = primaryDriverVersion;
+        this.secondaryDriverId = secondaryDriverId;
+        this.secondaryDriverVersion = secondaryDriverVersion;
     }
 
     /**
@@ -63,6 +88,27 @@ public class NdjsonMetricsWriter {
     private ObjectNode buildPhaseJson(String phaseId, String status, int connections,
                                        MetricsCollector collector) {
         ObjectNode root = objectMapper.createObjectNode();
+        
+        // Metadata (commit, driver info)
+        if (commitId != null || driverId != null) {
+            ObjectNode metadata = root.putObject("metadata");
+            if (commitId != null) {
+                metadata.put("commit_id", commitId);
+            }
+            metadata.put("timestamp", Instant.now().toString());
+            if (driverId != null) {
+                metadata.put("driver_id", driverId);
+            }
+            if (primaryDriverVersion != null) {
+                metadata.put("primary_driver_version", primaryDriverVersion);
+            }
+            if (secondaryDriverId != null) {
+                metadata.put("secondary_driver_id", secondaryDriverId);
+            }
+            if (secondaryDriverVersion != null) {
+                metadata.put("secondary_driver_version", secondaryDriverVersion);
+            }
+        }
         
         // Phase metadata
         ObjectNode phase = root.putObject("phase");

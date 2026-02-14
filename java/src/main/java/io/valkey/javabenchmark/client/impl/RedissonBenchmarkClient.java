@@ -58,6 +58,14 @@ public class RedissonBenchmarkClient implements BenchmarkClient {
     }
 
     @Override
+    public String getDriverVersion() {
+        // Get Redisson version from package implementation version
+        Package pkg = Redisson.class.getPackage();
+        String version = pkg != null ? pkg.getImplementationVersion() : null;
+        return version != null ? version : "unknown";
+    }
+
+    @Override
     public void connect(String host, int port, DriverConfig driverConfig) throws ClientException {
         logger.info("Connecting Redisson to {}:{} (cluster={})", host, port, driverConfig.isClusterMode());
         

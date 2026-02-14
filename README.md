@@ -2,6 +2,26 @@
 
 A multi-language benchmark suite for RESP protocol (Redis/Valkey) compatible databases and client libraries.
 
+## Performance Comparison
+
+The graphs below show performance comparisons of Java client libraries running on GitHub Actions runners. Results are automatically updated via CI.
+
+### Single Client (1 connection)
+
+| Throughput | Latency P99 |
+|------------|-------------|
+| ![SET RPS - Single Client](graphs/single-client/rps-SET.png) | ![SET Latency P99 - Single Client](graphs/single-client/latency-p99-SET.png) |
+| ![GET RPS - Single Client](graphs/single-client/rps-GET.png) | ![GET Latency P99 - Single Client](graphs/single-client/latency-p99-GET.png) |
+
+### 100 Concurrent Clients
+
+| Throughput | Latency P99 |
+|------------|-------------|
+| ![SET RPS - 100 Clients](graphs/100-clients/rps-SET.png) | ![SET Latency P99 - 100 Clients](graphs/100-clients/latency-p99-SET.png) |
+| ![GET RPS - 100 Clients](graphs/100-clients/rps-GET.png) | ![GET Latency P99 - 100 Clients](graphs/100-clients/latency-p99-GET.png) |
+
+> **Note**: These benchmarks run on shared GitHub Actions runners. Results may have variance between runs due to noisy neighbor effects. The graphs show averages across multiple runs (n=count shown in labels).
+
 ## Overview
 
 **resp-bench** provides unified benchmark functionality across multiple programming languages, enabling fair comparisons between different client libraries and implementations. All language engines share the same:
@@ -173,6 +193,36 @@ All engines output metrics in NDJSON format (one JSON object per line):
   }
 }
 ```
+
+## Graph Generation
+
+Generate performance comparison graphs from benchmark results:
+
+```bash
+# Install Python dependencies
+pip install matplotlib numpy
+
+# Generate graphs from all results (auto-detects latest CI run)
+python scripts/generate_graphs.py \
+  --results results/github-runner/reference/*.ndjson \
+  --output graphs/ \
+  --phase STEADY \
+  --workload "My Benchmark"
+
+# Generate graphs for a specific commit
+python scripts/generate_graphs.py \
+  --results results/github-runner/reference/*.ndjson \
+  --output graphs/ \
+  --phase STEADY \
+  --commit-id abc123def456
+```
+
+### Aggregation Policy
+
+The script aggregates results using a 3-tuple key: `(commit_id, primary_driver_version, secondary_driver_version)`. This ensures only results from the same CI run are compared together.
+
+- **Auto-detection (default)**: When no explicit filter is provided, the script finds the latest record by timestamp and uses its metadata values as the filter
+- **Explicit filter**: Use `--commit-id`, `--primary-driver-version`, or `--secondary-driver-version` to filter specific runs
 
 ## Make Targets
 

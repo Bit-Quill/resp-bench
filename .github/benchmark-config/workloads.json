@@ -1,0 +1,4 @@
+[
+    "configs/workloads/reference/basic-standalone-single-client.json",
+    "configs/workloads/reference/basic-standalone-100-clients.json"
+]

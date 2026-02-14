@@ -62,6 +62,14 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
     }
 
     @Override
+    public String getDriverVersion() {
+        // Get Spring Data Valkey version from package implementation version
+        Package pkg = ValkeyConnectionFactory.class.getPackage();
+        String version = pkg != null ? pkg.getImplementationVersion() : null;
+        return version != null ? version : "unknown";
+    }
+
+    @Override
     public void connect(String host, int port, DriverConfig driverConfig) throws ClientException {
         // Get secondary driver id (jedis, lettuce, or valkey-glide)
         this.secondaryDriverId = driverConfig.getSecondaryDriverId();

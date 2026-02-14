@@ -1,0 +1,9 @@
+{
+    "java": [
+        "configs/drivers/reference/jedis.json",
+        "configs/drivers/reference/lettuce.json",
+        "configs/drivers/reference/redisson.json",
+        "configs/drivers/reference/spring-data-redis-jedis.json",
+        "configs/drivers/reference/spring-data-redis-lettuce.json"
+    ]
+}

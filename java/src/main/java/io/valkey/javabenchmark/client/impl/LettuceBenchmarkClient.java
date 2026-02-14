@@ -60,6 +60,14 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
     }
 
     @Override
+    public String getDriverVersion() {
+        // Get Lettuce version from package implementation version
+        Package pkg = RedisClient.class.getPackage();
+        String version = pkg != null ? pkg.getImplementationVersion() : null;
+        return version != null ? version : "unknown";
+    }
+
+    @Override
     public void connect(String host, int port, DriverConfig driverConfig) throws ClientException {
         logger.info("Connecting Lettuce to {}:{} (cluster={})", host, port, driverConfig.isClusterMode());
         

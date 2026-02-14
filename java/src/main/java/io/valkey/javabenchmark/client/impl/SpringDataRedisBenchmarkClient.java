@@ -60,6 +60,14 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
     }
 
     @Override
+    public String getDriverVersion() {
+        // Get Spring Data Redis version from package implementation version
+        Package pkg = RedisConnectionFactory.class.getPackage();
+        String version = pkg != null ? pkg.getImplementationVersion() : null;
+        return version != null ? version : "unknown";
+    }
+
+    @Override
     public void connect(String host, int port, DriverConfig driverConfig) throws ClientException {
         // Get secondary driver id (jedis or lettuce)
         this.secondaryDriverId = driverConfig.getSecondaryDriverId();
