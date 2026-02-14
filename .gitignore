@@ -1,0 +1,54 @@
+# Build directories
+work/
+output/*.ndjson
+
+# Java
+java/target/
+java/*.jar
+java/dependency-reduced-pom.xml
+*.class
+
+# Maven
+.mvn/
+mvnw
+mvnw.cmd
+
+# Python
+python/__pycache__/
+python/*.egg-info/
+python/dist/
+python/build/
+python/.pytest_cache/
+python/.venv/
+*.pyc
+*.pyo
+
+# Node.js / Config Editor
+config-editor/node_modules/
+config-editor/dist/
+config-editor/.vite/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Server data
+dump.rdb
+*.rdb
+*.aof
+nodes-*.conf
+
+# Temporary files
+*.tmp
+*.temp

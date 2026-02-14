@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} -- %msg%n</pattern>
+        </encoder>
+    </appender>
+    
+    <!-- Suppress DEBUG logs from Lettuce -->
+    <logger name="io.lettuce" level="INFO"/>
+    <logger name="io.lettuce.core" level="INFO"/>
+    <logger name="io.lettuce.core.protocol" level="WARN"/>
+    
+    <!-- Suppress DEBUG logs from Netty -->
+    <logger name="io.netty" level="INFO"/>
+    
+    <!-- Suppress DEBUG logs from Reactor -->
+    <logger name="reactor" level="INFO"/>
+    
+    <!-- Suppress DEBUG logs from our own BenchmarkClientFactory registration -->
+    <logger name="io.valkey.javabenchmark.client.BenchmarkClientFactory" level="INFO"/>
+    
+    <!-- Suppress DEBUG logs from CommandFactory registration -->
+    <logger name="io.valkey.javabenchmark.command.CommandFactory" level="INFO"/>
+    
+    <!-- Keep our own logs at INFO level -->
+    <logger name="io.valkey.javabenchmark" level="INFO"/>
+    
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>
