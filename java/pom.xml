@@ -5,11 +5,11 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>io.valkey</groupId>
-    <artifactId>java-valkey-benchmark</artifactId>
+    <artifactId>resp-bench-java</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <name>Java Valkey Benchmark</name>
+    <name>resp-bench Java Engine</name>
     <description>Benchmark engine for Java Valkey/Redis client libraries</description>
 
     <properties>

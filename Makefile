@@ -252,7 +252,7 @@ clobber:
 # Java Engine
 # ============================================================================
 
-JAVA_JAR=java/target/resp-bench-java-1.0.0-SNAPSHOT-jar-with-dependencies.jar
+JAVA_JAR=java/target/resp-bench-java-1.0.0-SNAPSHOT.jar
 DRIVER?=configs/drivers/example-jedis-standalone.json
 WORKLOAD?=configs/workloads/example-workload.json
 SERVER?=localhost:6379

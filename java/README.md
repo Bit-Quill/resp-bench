@@ -37,7 +37,7 @@ make java-run \
   WORKLOAD=configs/workloads/example-workload.json
 
 # Or directly
-java -jar target/resp-bench-java-1.0.0-SNAPSHOT-jar-with-dependencies.jar \
+java -jar target/resp-bench-java-1.0.0-SNAPSHOT.jar \
   --server localhost:6379 \
   --driver ../configs/drivers/example-jedis-standalone.json \
   --workload ../configs/workloads/example-workload.json \
