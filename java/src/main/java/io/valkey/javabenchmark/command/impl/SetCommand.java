@@ -13,6 +13,8 @@ import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * SET command implementation.
+ *
+ * @author Ilia Kolominsky
  */
 public class SetCommand implements Command {
     private double weight = 1.0;

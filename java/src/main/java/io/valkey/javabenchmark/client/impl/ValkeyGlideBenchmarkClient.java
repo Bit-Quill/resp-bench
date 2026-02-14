@@ -29,6 +29,8 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Valkey GLIDE implementation of BenchmarkClient.
+ *
+ * @author Ilia Kolominsky
  */
 public class ValkeyGlideBenchmarkClient implements BenchmarkClient {
 

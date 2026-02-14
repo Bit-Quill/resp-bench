@@ -37,6 +37,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * Spring Data Valkey implementation of BenchmarkClient.
  * Supports Jedis, Lettuce, and ValkeyGlide as underlying drivers via secondary_driver_id configuration.
  * Default: ValkeyGlide if secondary_driver_id is not specified.
+ *
+ * @author Ilia Kolominsky
  */
 public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
 

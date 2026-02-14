@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 
  * <p>Unlike token bucket, there is no burst capacity - the rate is strictly enforced
  * from the first operation.</p>
+ *
+ * @author Ilia Kolominsky
  */
 public class RateLimiter {
     private final int ratePerSecond;

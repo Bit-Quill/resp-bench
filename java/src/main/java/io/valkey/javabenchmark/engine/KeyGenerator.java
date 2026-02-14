@@ -10,6 +10,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Key generator for benchmark operations.
+ *
+ * @author Ilia Kolominsky
  */
 public class KeyGenerator {
     private final KeyspaceConfig config;

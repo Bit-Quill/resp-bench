@@ -23,6 +23,8 @@ import java.util.Map;
 /**
  * Configuration model for driver settings.
  * Maps to the driver JSON configuration files.
+ *
+ * @author Ilia Kolominsky
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class DriverConfig {

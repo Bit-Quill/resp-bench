@@ -20,6 +20,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Configuration model for phase completion criteria.
+ *
+ * @author Ilia Kolominsky
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class CompletionConfig {

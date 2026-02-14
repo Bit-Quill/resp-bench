@@ -30,6 +30,8 @@ import java.util.concurrent.CompletableFuture;
  * <p>All latency-sensitive operations return CompletableFuture&lt;TimedResult&gt; for async execution.
  * The timing is measured at the point of actual execution, not at submission time,
  * ensuring accurate latency measurements even under high concurrency.</p>
+ *
+ * @author Ilia Kolominsky
  */
 public interface BenchmarkClient extends AutoCloseable {
 

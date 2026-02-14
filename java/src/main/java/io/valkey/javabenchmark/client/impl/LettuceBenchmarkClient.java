@@ -33,6 +33,8 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Lettuce implementation of BenchmarkClient.
+ *
+ * @author Ilia Kolominsky
  */
 public class LettuceBenchmarkClient implements BenchmarkClient {
 

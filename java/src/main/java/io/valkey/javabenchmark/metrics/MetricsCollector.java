@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Collects metrics for benchmark operations using HdrHistogram.
+ *
+ * @author Ilia Kolominsky
  */
 public class MetricsCollector {
     private final Map<String, CommandMetrics> commandMetrics = new ConcurrentHashMap<>();

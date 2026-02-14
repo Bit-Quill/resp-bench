@@ -12,6 +12,8 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * PING command implementation.
+ *
+ * @author Ilia Kolominsky
  */
 public class PingCommand implements Command {
     private double weight = 1.0;

@@ -36,6 +36,8 @@ import java.util.concurrent.TimeUnit;
  * 
  * <p>Uses Redisson's low-level command executor for optimal performance,
  * bypassing the high-level distributed object APIs which have significant overhead.</p>
+ *
+ * @author Ilia Kolominsky
  */
 public class RedissonBenchmarkClient implements BenchmarkClient {
 

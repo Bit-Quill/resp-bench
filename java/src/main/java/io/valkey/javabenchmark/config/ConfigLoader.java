@@ -25,6 +25,8 @@ import java.nio.file.Path;
 
 /**
  * Utility class for loading configuration files.
+ *
+ * @author Ilia Kolominsky
  */
 public class ConfigLoader {
 

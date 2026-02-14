@@ -44,6 +44,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *     }
  * }
  * </pre>
+ *
+ * @author Ilia Kolominsky
  */
 public class RecordingBenchmarkClient implements BenchmarkClient {
 

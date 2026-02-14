@@ -29,6 +29,8 @@ import java.util.concurrent.Executors;
 
 /**
  * Jedis implementation of BenchmarkClient.
+ *
+ * @author Ilia Kolominsky
  */
 public class JedisBenchmarkClient implements BenchmarkClient {
 

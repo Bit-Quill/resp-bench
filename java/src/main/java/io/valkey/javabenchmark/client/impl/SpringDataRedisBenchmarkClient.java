@@ -35,6 +35,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * Spring Data Redis implementation of BenchmarkClient.
  * Supports Jedis and Lettuce as underlying drivers via secondary_driver_id configuration.
  * Default: Jedis if secondary_driver_id is not specified.
+ *
+ * @author Ilia Kolominsky
  */
 public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
 

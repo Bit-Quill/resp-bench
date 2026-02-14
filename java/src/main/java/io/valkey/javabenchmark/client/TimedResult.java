@@ -23,6 +23,7 @@ package io.valkey.javabenchmark.client;
  * at submission time.</p>
  *
  * @param <T> the type of the result value
+ * @author Ilia Kolominsky
  */
 public class TimedResult<T> {
     private final T value;

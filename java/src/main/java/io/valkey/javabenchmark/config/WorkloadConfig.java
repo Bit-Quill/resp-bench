@@ -23,6 +23,8 @@ import java.util.List;
 /**
  * Configuration model for workload settings.
  * Maps to the workload JSON configuration files.
+ *
+ * @author Ilia Kolominsky
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class WorkloadConfig {

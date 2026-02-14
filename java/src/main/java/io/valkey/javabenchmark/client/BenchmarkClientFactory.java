@@ -38,6 +38,7 @@ import java.util.function.Supplier;
  *   <li>spring-data-valkey - Spring Data Valkey</li>
  *   <li>spring-data-redis - Spring Data Redis</li>
  * </ul>
+ * @author Ilia Kolominsky 
  */
 public class BenchmarkClientFactory {
 

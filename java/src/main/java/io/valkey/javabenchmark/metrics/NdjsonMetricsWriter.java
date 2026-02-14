@@ -23,6 +23,8 @@ import java.util.Map;
  * to detect phase completion by watching for new lines.
  * 
  * Includes native HDR histogram encoding with base64 payload for full fidelity latency data.
+ *
+ * @author Ilia Kolominsky
  */
 public class NdjsonMetricsWriter {
     private static final Logger logger = LoggerFactory.getLogger(NdjsonMetricsWriter.class);

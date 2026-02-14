@@ -20,6 +20,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Configuration model for keyspace settings.
+ *
+ * @author Ilia Kolominsky
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class KeyspaceConfig {

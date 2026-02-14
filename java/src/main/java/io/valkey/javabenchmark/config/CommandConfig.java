@@ -22,6 +22,8 @@ import java.util.Map;
 
 /**
  * Configuration model for a benchmark command.
+ *
+ * @author Ilia Kolominsky
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class CommandConfig {

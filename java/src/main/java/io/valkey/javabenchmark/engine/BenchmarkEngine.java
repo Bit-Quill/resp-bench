@@ -32,6 +32,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>Natural backpressure - new requests wait for available slots</li>
  *   <li>Correct behavior for both duration-based and request-based workloads</li>
  * </ul>
+ *
+ * @author Ilia Kolominsky
  */
 public class BenchmarkEngine {
     private static final Logger logger = LoggerFactory.getLogger(BenchmarkEngine.class);

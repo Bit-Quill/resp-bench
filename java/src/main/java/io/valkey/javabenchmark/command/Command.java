@@ -30,6 +30,8 @@ import java.util.concurrent.CompletableFuture;
  *   <li>Implement this interface</li>
  *   <li>Register it in {@link CommandFactory}</li>
  * </ol>
+ *
+ * @author Ilia Kolominsky
  */
 public interface Command {
 

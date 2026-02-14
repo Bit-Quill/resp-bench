@@ -26,6 +26,8 @@ import java.util.function.Supplier;
 /**
  * Factory for creating Command instances.
  * Supports registration of custom command implementations.
+ *
+ * @author Ilia Kolominsky
  */
 public class CommandFactory {
 

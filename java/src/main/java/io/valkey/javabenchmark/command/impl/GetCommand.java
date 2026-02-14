@@ -12,6 +12,8 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * GET command implementation.
+ *
+ * @author Ilia Kolominsky
  */
 public class GetCommand implements Command {
     private double weight = 1.0;

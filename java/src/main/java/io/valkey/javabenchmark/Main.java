@@ -14,6 +14,8 @@ import java.util.concurrent.Callable;
 
 /**
  * Main entry point for the Valkey Java Benchmark tool.
+ *
+ * @author Ilia Kolominsky
  */
 @Command(name = "java-valkey-benchmark",
          mixinStandardHelpOptions = true,

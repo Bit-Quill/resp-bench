@@ -22,6 +22,8 @@ import java.util.List;
 
 /**
  * Configuration model for a benchmark phase.
+ *
+ * @author Ilia Kolominsky
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class PhaseConfig {
