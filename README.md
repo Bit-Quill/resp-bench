@@ -126,6 +126,26 @@ Defines the benchmark phases and traffic patterns:
 
 See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full details.
 
+## Config Editor
+
+A visual tool for creating and editing benchmark configurations without writing JSON manually.
+
+### Starting the Editor
+
+```bash
+# Development mode (with hot reload)
+make config-editor-dev
+
+# Then open http://localhost:5173 in your browser
+```
+
+### Features
+
+- **Driver Configuration**: Select client library, connection mode, and driver-specific settings
+- **Workload Configuration**: Define benchmark phases, commands, keyspace settings, and completion criteria
+- **Import/Export**: Load existing configs or save new ones as JSON files
+- **Live Preview**: See the generated JSON in real-time as you make changes
+
 ## Metrics Output
 
 All engines output metrics in NDJSON format (one JSON object per line):
