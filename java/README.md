@@ -47,8 +47,10 @@ java -jar target/resp-bench-java-1.0.0-SNAPSHOT.jar \
 ## CLI Options
 
 ```
-Usage: resp-bench [-hV] [--info] -d=<driverConfig> -m=<metricsOutput>
-                  -s=<servers> -w=<workloadConfig>
+Usage: resp-bench [-hV] [--info] [--commit-id=<commitId>] -d=<driverConfig>
+                  -m=<metricsOutput> -s=<servers> -w=<workloadConfig>
+      --commit-id=<commitId>
+                      Git commit ID for metadata (auto-detected from build)
   -d, --driver=<driverConfig>
                       Path to driver configuration JSON
   -h, --help          Show this help message and exit.
@@ -62,6 +64,8 @@ Usage: resp-bench [-hV] [--info] -d=<driverConfig> -m=<metricsOutput>
   -w, --workload=<workloadConfig>
                       Path to workload configuration JSON
 ```
+
+> **Note**: The `--commit-id` is auto-detected during Maven build from git. Override only when needed.
 
 ## Testing
 

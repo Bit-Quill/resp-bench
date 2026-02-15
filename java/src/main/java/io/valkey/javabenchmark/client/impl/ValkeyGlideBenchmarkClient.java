@@ -22,6 +22,7 @@ import glide.api.models.configuration.*;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
+import io.valkey.javabenchmark.util.VersionHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,10 +54,7 @@ public class ValkeyGlideBenchmarkClient implements BenchmarkClient {
 
     @Override
     public String getDriverVersion() {
-        // Get Valkey GLIDE version from package implementation version
-        Package pkg = GlideClient.class.getPackage();
-        String version = pkg != null ? pkg.getImplementationVersion() : null;
-        return version != null ? version : "unknown";
+        return VersionHelper.getVersion(GlideClient.class, "io.valkey", "valkey-glide");
     }
 
     @Override

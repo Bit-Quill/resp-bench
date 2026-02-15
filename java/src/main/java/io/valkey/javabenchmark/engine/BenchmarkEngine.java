@@ -92,10 +92,7 @@ public class BenchmarkEngine {
             String driverId = driverConfig.getDriverId();
             String primaryVersion = sampleClient.getDriverVersion();
             String secondaryDriverId = driverConfig.getSecondaryDriverId();
-            String secondaryVersion = null;
-            
-            // For spring-data-* drivers, we would need to get the underlying driver version
-            // For now, we record the secondary driver ID if present
+            String secondaryVersion = sampleClient.getSecondaryDriverVersion();
             
             metricsWriter.setMetadata(commitId, driverId, primaryVersion, secondaryDriverId, secondaryVersion);
             

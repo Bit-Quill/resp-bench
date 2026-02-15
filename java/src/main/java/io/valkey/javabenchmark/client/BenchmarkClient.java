@@ -57,6 +57,18 @@ public interface BenchmarkClient extends AutoCloseable {
     String getDriverVersion();
 
     /**
+     * Get the secondary driver library version (for composite drivers like Spring Data).
+     * 
+     * <p>For drivers that wrap other drivers (e.g., spring-data-valkey using jedis/lettuce/valkey-glide),
+     * this returns the version of the underlying driver.</p>
+     * 
+     * @return the secondary driver version string, or null if not applicable
+     */
+    default String getSecondaryDriverVersion() {
+        return null;
+    }
+
+    /**
      * Initialize and connect to the server.
      * 
      * @param host server host

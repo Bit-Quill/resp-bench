@@ -19,7 +19,7 @@ import java.util.concurrent.Callable;
  */
 @Command(name = "java-valkey-benchmark",
          mixinStandardHelpOptions = true,
-         version = "1.0.0",
+         versionProvider = Main.VersionProvider.class,
          description = "Benchmark engine for Java Valkey/Redis client libraries")
 public class Main implements Callable<Integer> {
 
@@ -40,8 +40,8 @@ public class Main implements Callable<Integer> {
     private String metricsPath;
 
     @Option(names = {"--commit-id"},
-            description = "Git commit ID for metadata (optional)")
-    private String commitId;
+            description = "Git commit ID for metadata (auto-detected from build, use this to override)")
+    private String commitIdOverride;
 
     @Option(names = {"--info"},
             description = "Show supported drivers and commands")
@@ -63,6 +63,12 @@ public class Main implements Callable<Integer> {
         DriverConfig driver = ConfigLoader.loadDriverConfig(driverConfig);
         WorkloadConfig workload = ConfigLoader.loadWorkloadConfig(workloadConfig);
 
+        // Determine commit ID: CLI override takes precedence, then BuildInfo auto-detection
+        String commitId = commitIdOverride;
+        if (commitId == null || commitId.isEmpty()) {
+            commitId = BuildInfo.getCommitSummary();
+        }
+
         // Create and run engine
         BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsPath, commitId);
         engine.run();
@@ -71,9 +77,11 @@ public class Main implements Callable<Integer> {
     }
 
     private void printInfo() {
+        String version = BuildInfo.getCommitSummary();
+        String versionStr = version != null ? version : "dev";
         System.out.println();
-        System.out.println("Valkey Java Benchmark Engine v1.0.0");
-        System.out.println("====================================");
+        System.out.println("Valkey Java Benchmark Engine (" + versionStr + ")");
+        System.out.println("============================================");
         System.out.println();
 
         System.out.println("Supported Drivers:");
@@ -110,5 +118,14 @@ public class Main implements Callable<Integer> {
     public static void main(String[] args) {
         int exitCode = new CommandLine(new Main()).execute(args);
         System.exit(exitCode);
+    }
+
+    /** Provides dynamic version from BuildInfo for picocli --version */
+    static class VersionProvider implements IVersionProvider {
+        @Override
+        public String[] getVersion() {
+            String commit = BuildInfo.getCommitSummary();
+            return new String[]{ "Valkey Java Benchmark Engine (" + (commit != null ? commit : "dev") + ")" };
+        }
     }
 }

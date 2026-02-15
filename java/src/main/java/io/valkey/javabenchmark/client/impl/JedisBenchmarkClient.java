@@ -18,6 +18,7 @@ package io.valkey.javabenchmark.client.impl;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
+import io.valkey.javabenchmark.util.VersionHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.*;
@@ -54,10 +55,7 @@ public class JedisBenchmarkClient implements BenchmarkClient {
 
     @Override
     public String getDriverVersion() {
-        // Get Jedis version from package implementation version
-        Package pkg = Jedis.class.getPackage();
-        String version = pkg != null ? pkg.getImplementationVersion() : null;
-        return version != null ? version : "unknown";
+        return VersionHelper.getVersion(Jedis.class, "redis.clients", "jedis");
     }
 
     @Override

@@ -18,6 +18,7 @@ package io.valkey.javabenchmark.client.impl;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
+import io.valkey.javabenchmark.util.VersionHelper;
 import org.redisson.Redisson;
 import org.redisson.api.*;
 import org.redisson.client.codec.StringCodec;
@@ -59,10 +60,7 @@ public class RedissonBenchmarkClient implements BenchmarkClient {
 
     @Override
     public String getDriverVersion() {
-        // Get Redisson version from package implementation version
-        Package pkg = Redisson.class.getPackage();
-        String version = pkg != null ? pkg.getImplementationVersion() : null;
-        return version != null ? version : "unknown";
+        return VersionHelper.getVersion(Redisson.class, "org.redisson", "redisson");
     }
 
     @Override

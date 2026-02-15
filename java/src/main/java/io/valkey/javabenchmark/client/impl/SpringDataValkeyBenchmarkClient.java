@@ -15,9 +15,13 @@
  */
 package io.valkey.javabenchmark.client.impl;
 
+import glide.api.GlideClient;
+import io.lettuce.core.RedisClient;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
+import io.valkey.javabenchmark.util.VersionHelper;
+import redis.clients.jedis.Jedis;
 import io.valkey.springframework.data.valkey.connection.*;
 import io.valkey.springframework.data.valkey.connection.jedis.JedisClientConfiguration;
 import io.valkey.springframework.data.valkey.connection.jedis.JedisConnectionFactory;
@@ -63,10 +67,21 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
 
     @Override
     public String getDriverVersion() {
-        // Get Spring Data Valkey version from package implementation version
-        Package pkg = ValkeyConnectionFactory.class.getPackage();
-        String version = pkg != null ? pkg.getImplementationVersion() : null;
-        return version != null ? version : "unknown";
+        return VersionHelper.getVersion(ValkeyConnectionFactory.class, 
+                "io.valkey.springframework.data", "spring-data-valkey");
+    }
+
+    @Override
+    public String getSecondaryDriverVersion() {
+        if (secondaryDriverId == null) {
+            return null;
+        }
+        return switch (secondaryDriverId.toLowerCase()) {
+            case "jedis" -> VersionHelper.getVersion(Jedis.class, "redis.clients", "jedis");
+            case "lettuce" -> VersionHelper.getVersion(RedisClient.class, "io.lettuce", "lettuce-core");
+            case "valkey-glide" -> VersionHelper.getVersion(GlideClient.class, "io.valkey", "valkey-glide");
+            default -> null;
+        };
     }
 
     @Override

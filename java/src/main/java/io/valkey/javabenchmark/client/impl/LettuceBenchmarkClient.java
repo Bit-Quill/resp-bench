@@ -25,6 +25,7 @@ import io.lettuce.core.codec.ByteArrayCodec;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
+import io.valkey.javabenchmark.util.VersionHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -61,10 +62,7 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
 
     @Override
     public String getDriverVersion() {
-        // Get Lettuce version from package implementation version
-        Package pkg = RedisClient.class.getPackage();
-        String version = pkg != null ? pkg.getImplementationVersion() : null;
-        return version != null ? version : "unknown";
+        return VersionHelper.getVersion(RedisClient.class, "io.lettuce", "lettuce-core");
     }
 
     @Override

@@ -172,6 +172,14 @@ All engines output metrics in NDJSON format (one JSON object per line):
 
 ```json
 {
+  "metadata": {
+    "commit_id": "abc123d-dirty",
+    "timestamp": "2026-02-15T12:00:00Z",
+    "driver_id": "jedis",
+    "primary_driver_version": "5.2.0",
+    "secondary_driver_id": null,
+    "secondary_driver_version": null
+  },
   "phase": {
     "id": "STEADY",
     "status": "COMPLETED",
