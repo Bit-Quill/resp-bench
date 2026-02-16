@@ -6,10 +6,9 @@ Reads NDJSON result files and generates performance comparison graphs
 for RPS (requests per second) and latency percentiles (p50, p95, p99, p999).
 
 Aggregation Policy:
-- Results are filtered by a 3-tuple: (commit_id, primary_driver_version, secondary_driver_version)
-- If the tuple is not explicitly provided, the script finds the latest record (by timestamp)
-  for the required phase and uses its metadata values as the filter
-- This ensures that only results from the same CI run are aggregated together
+- Results are filtered by commit_id to ensure only results from the same CI run are compared
+- If --commit-id is not provided, the script auto-detects it from the git repository
+- Each driver's version is displayed in graph labels but NOT used for filtering
 
 Usage:
     python generate_graphs.py \
@@ -17,7 +16,7 @@ Usage:
         --output graphs/ \
         --phase STEADY
 
-    # Or with explicit filter:
+    # Or with explicit commit filter:
     python generate_graphs.py \
         --results results/github-runner/reference/*.json \
         --output graphs/ \
@@ -29,11 +28,11 @@ Author: Ilia Kolominsky
 
 import argparse
 import json
+import subprocess
 import sys
 from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple, NamedTuple
+from typing import Dict, List, Optional, Any, NamedTuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -68,15 +67,15 @@ def parse_args():
     )
     parser.add_argument(
         "--commit-id",
-        help="Filter results by commit ID (default: auto-detect from latest record)",
+        help="Filter results by commit ID (default: auto-detect from git repository)",
     )
     parser.add_argument(
         "--primary-driver-version",
-        help="Filter results by primary driver version (default: auto-detect from latest record)",
+        help="Filter results by primary driver version (default: include all versions)",
     )
     parser.add_argument(
         "--secondary-driver-version",
-        help="Filter results by secondary driver version (default: auto-detect from latest record)",
+        help="Filter results by secondary driver version (default: include all versions)",
     )
     parser.add_argument(
         "--workload",
@@ -113,45 +112,37 @@ def load_results(file_paths: List[str], phase_filter: str) -> List[Dict[str, Any
     return results
 
 
-def find_latest_aggregation_key(results: List[Dict[str, Any]]) -> AggregationKey:
+def get_current_commit_id() -> Optional[str]:
     """
-    Find the aggregation key (commit_id, primary_driver_version, secondary_driver_version)
-    from the most recent result based on timestamp.
+    Get the current git commit ID (short form) from the repository.
     
-    This ensures that when no explicit filter is provided, we use the metadata
-    from the latest CI run.
+    Appends '-dirty' suffix if there are uncommitted changes (matching Java engine behavior).
+    
+    Returns None if git is not available or we're not in a git repository.
     """
-    if not results:
-        return AggregationKey(None, None, None)
-    
-    # Find the latest record by timestamp
-    latest = None
-    latest_timestamp = None
-    
-    for result in results:
-        metadata = result.get("metadata", {})
-        timestamp_str = metadata.get("timestamp")
+    try:
+        # Get short commit hash
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit_id = result.stdout.strip()
         
-        if timestamp_str:
-            try:
-                # Parse ISO format timestamp
-                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                if latest_timestamp is None or timestamp > latest_timestamp:
-                    latest_timestamp = timestamp
-                    latest = result
-            except (ValueError, TypeError):
-                pass
-    
-    # Fallback to last record if no valid timestamps found
-    if latest is None:
-        latest = results[-1]
-    
-    metadata = latest.get("metadata", {})
-    return AggregationKey(
-        commit_id=metadata.get("commit_id"),
-        primary_driver_version=metadata.get("primary_driver_version"),
-        secondary_driver_version=metadata.get("secondary_driver_version"),
-    )
+        # Check for uncommitted changes (dirty state)
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if status_result.stdout.strip():
+            commit_id += "-dirty"
+        
+        return commit_id
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
 
 
 def matches_aggregation_key(
@@ -409,19 +400,30 @@ def main():
     
     print(f"Found {len(results)} result record(s) for phase '{args.phase}'")
     
-    # Build aggregation key from args or auto-detect from latest record
-    if args.commit_id or args.primary_driver_version or args.secondary_driver_version:
-        # Use explicitly provided values (None for unspecified components means "match any")
-        aggregation_key = AggregationKey(
-            commit_id=args.commit_id,
-            primary_driver_version=args.primary_driver_version,
-            secondary_driver_version=args.secondary_driver_version,
-        )
-        print(f"Using explicit aggregation key: {aggregation_key}")
+    # Determine commit_id for filtering
+    commit_id = args.commit_id
+    if not commit_id:
+        # Auto-detect from git repository
+        commit_id = get_current_commit_id()
+        if commit_id:
+            print(f"Using commit ID from git: {commit_id}")
+        else:
+            print(
+                "Error: Could not determine commit ID. "
+                "Please provide --commit-id or run from a git repository.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     else:
-        # Auto-detect from the latest record
-        aggregation_key = find_latest_aggregation_key(results)
-        print(f"Auto-detected aggregation key from latest record: {aggregation_key}")
+        print(f"Using explicit commit ID: {commit_id}")
+    
+    # Build aggregation key - only filter by commit_id by default
+    # Driver versions are NOT used for filtering (they appear in labels only)
+    aggregation_key = AggregationKey(
+        commit_id=commit_id,
+        primary_driver_version=args.primary_driver_version,
+        secondary_driver_version=args.secondary_driver_version,
+    )
     
     # Aggregate
     aggregated = aggregate_results(results, aggregation_key)
