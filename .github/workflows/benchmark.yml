@@ -62,7 +62,7 @@ jobs:
       - name: Run benchmark
         run: |
           mkdir -p results/github-runner/reference
-          java -jar java/target/java-benchmark-1.0-SNAPSHOT.jar \
+          java -jar java/target/resp-bench-java-1.0.0-SNAPSHOT.jar \
             --server localhost:6379 \
             --driver ${{ matrix.driver }} \
             --workload ${{ matrix.workload }} \
