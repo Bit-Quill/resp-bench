@@ -2,11 +2,6 @@ name: Benchmark
 
 on:
   workflow_dispatch:
-    inputs:
-      run_benchmark:
-        description: 'Run benchmark'
-        required: false
-        default: 'true'
 
 jobs:
   benchmark:
