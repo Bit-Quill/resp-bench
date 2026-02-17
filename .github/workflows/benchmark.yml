@@ -115,7 +115,8 @@ jobs:
             --results "results/github-runner/reference/*-basic-standalone-single-client.ndjson" \
             --output graphs/single-client/ \
             --phase STEADY \
-            --workload "Single Client"
+            --workload "Single Client" \
+            --commit-id ${{ github.sha }}
 
       - name: Generate graphs - 100 Clients
         run: |
@@ -123,7 +124,8 @@ jobs:
             --results "results/github-runner/reference/*-basic-standalone-100-clients.ndjson" \
             --output graphs/100-clients/ \
             --phase STEADY \
-            --workload "100 Clients"
+            --workload "100 Clients" \
+            --commit-id ${{ github.sha }}
 
       - name: Upload graphs
         uses: actions/upload-artifact@v4
