@@ -8,17 +8,37 @@ The graphs below show performance comparisons of Java client libraries running o
 
 ### Single Client (1 connection)
 
-| Throughput | Latency P99 |
-|------------|-------------|
-| ![SET RPS - Single Client](graphs/single-client/rps-SET.png) | ![SET Latency P99 - Single Client](graphs/single-client/latency-p99-SET.png) |
-| ![GET RPS - Single Client](graphs/single-client/rps-GET.png) | ![GET Latency P99 - Single Client](graphs/single-client/latency-p99-GET.png) |
+| Throughput |
+|------------|
+| ![SET RPS - Single Client](graphs/single-client/rps-SET.png) |
+| ![GET RPS - Single Client](graphs/single-client/rps-GET.png) |
+
+| Latency P50 |
+|-------------|
+| ![SET Latency P50 - Single Client](graphs/single-client/latency-p50-SET.png) |
+| ![GET Latency P50 - Single Client](graphs/single-client/latency-p50-GET.png) |
+
+| Latency P99 |
+|-------------|
+| ![SET Latency P99 - Single Client](graphs/single-client/latency-p99-SET.png) |
+| ![GET Latency P99 - Single Client](graphs/single-client/latency-p99-GET.png) |
 
 ### 100 Concurrent Clients
 
-| Throughput | Latency P99 |
-|------------|-------------|
-| ![SET RPS - 100 Clients](graphs/100-clients/rps-SET.png) | ![SET Latency P99 - 100 Clients](graphs/100-clients/latency-p99-SET.png) |
-| ![GET RPS - 100 Clients](graphs/100-clients/rps-GET.png) | ![GET Latency P99 - 100 Clients](graphs/100-clients/latency-p99-GET.png) |
+| Throughput |
+|------------|
+| ![SET RPS - 100 Clients](graphs/100-clients/rps-SET.png) |
+| ![GET RPS - 100 Clients](graphs/100-clients/rps-GET.png) |
+
+| Latency P50 |
+|-------------|
+| ![SET Latency P50 - 100 Clients](graphs/100-clients/latency-p50-SET.png) |
+| ![GET Latency P50 - 100 Clients](graphs/100-clients/latency-p50-GET.png) |
+
+| Latency P99 |
+|-------------|
+| ![SET Latency P99 - 100 Clients](graphs/100-clients/latency-p99-SET.png) |
+| ![GET Latency P99 - 100 Clients](graphs/100-clients/latency-p99-GET.png) |
 
 > **Note**: These benchmarks run on shared GitHub Actions runners. Results may have variance between runs due to noisy neighbor effects. The graphs show averages across multiple runs (n=count shown in labels).
 
