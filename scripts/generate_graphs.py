@@ -116,7 +116,8 @@ def get_current_commit_id() -> Optional[str]:
     """
     Get the current git commit ID (short form) from the repository.
     
-    Appends '-dirty' suffix if there are uncommitted changes (matching Java engine behavior).
+    Appends '-dirty' suffix if there are uncommitted changes to tracked files
+    (matching Java engine behavior). Untracked files do not cause a dirty state.
     
     Returns None if git is not available or we're not in a git repository.
     """
@@ -130,14 +131,14 @@ def get_current_commit_id() -> Optional[str]:
         )
         commit_id = result.stdout.strip()
         
-        # Check for uncommitted changes (dirty state)
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
+        # Check for uncommitted changes to tracked files (dirty state)
+        # git diff --quiet exits with 1 if there are changes, 0 if clean
+        # This only checks tracked files - untracked files don't affect this
+        diff_result = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD"],
             capture_output=True,
-            text=True,
-            check=True,
         )
-        if status_result.stdout.strip():
+        if diff_result.returncode != 0:
             commit_id += "-dirty"
         
         return commit_id
