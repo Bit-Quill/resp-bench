@@ -4,6 +4,10 @@
         "configs/drivers/reference/lettuce.json",
         "configs/drivers/reference/redisson.json",
         "configs/drivers/reference/spring-data-redis-jedis.json",
-        "configs/drivers/reference/spring-data-redis-lettuce.json"
+        "configs/drivers/reference/spring-data-redis-lettuce.json",
+        "configs/drivers/reference/spring-data-valkey-glide-standalone.json",
+        "configs/drivers/reference/spring-data-valkey-jedis-standalone.json",
+        "configs/drivers/reference/spring-data-valkey-lettuce-standalone.json",
+        "configs/drivers/reference/valkey-glide-standalone.json"
     ]
 }
