@@ -16,6 +16,10 @@ jobs:
           - configs/drivers/reference/redisson.json
           - configs/drivers/reference/spring-data-redis-jedis.json
           - configs/drivers/reference/spring-data-redis-lettuce.json
+          - configs/drivers/reference/spring-data-valkey-glide.json
+          - configs/drivers/reference/spring-data-valkey-jedis.json
+          - configs/drivers/reference/spring-data-valkey-lettuce.json
+          - configs/drivers/reference/valkey-glide.json
         workload:
           - configs/workloads/reference/basic-standalone-single-client.json
           - configs/workloads/reference/basic-standalone-100-clients.json
