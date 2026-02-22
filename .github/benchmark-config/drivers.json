@@ -9,5 +9,8 @@
         "configs/drivers/reference/spring-data-valkey-jedis-standalone.json",
         "configs/drivers/reference/spring-data-valkey-lettuce-standalone.json",
         "configs/drivers/reference/valkey-glide-standalone.json"
+    ],
+    "ruby": [
+        "configs/drivers/reference/redis-rb.json"
     ]
 }

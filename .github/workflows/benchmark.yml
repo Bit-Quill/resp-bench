@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  benchmark:
+  benchmark-java:
     runs-on: ubuntu-latest
     
     strategy:
@@ -81,12 +81,80 @@ jobs:
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-${{ steps.names.outputs.driver_name }}-${{ steps.names.outputs.workload_name }}
+          name: benchmark-java-${{ steps.names.outputs.driver_name }}-${{ steps.names.outputs.workload_name }}
+          path: ${{ steps.names.outputs.result_file }}
+          retention-days: 30
+
+  benchmark-ruby:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        driver: 
+          - configs/drivers/reference/redis-rb.json
+        workload:
+          - configs/workloads/reference/basic-standalone-single-client.json
+          - configs/workloads/reference/basic-standalone-100-clients.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: ruby
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Start Valkey server
+        run: |
+          # Use Makefile target which builds from source and configures with persistence disabled
+          make server-standalone-start
+          # Wait for server to be ready
+          sleep 2
+          # Verify server is up and persistence is disabled
+          work/valkey/bin/valkey-cli ping
+          work/valkey/bin/valkey-cli CONFIG GET save
+
+      - name: Extract names for result file
+        id: names
+        run: |
+          DRIVER_NAME=$(basename ${{ matrix.driver }} .json)
+          WORKLOAD_NAME=$(basename ${{ matrix.workload }} .json)
+          echo "driver_name=$DRIVER_NAME" >> $GITHUB_OUTPUT
+          echo "workload_name=$WORKLOAD_NAME" >> $GITHUB_OUTPUT
+          echo "result_file=results/github-runner/reference/${DRIVER_NAME}-${WORKLOAD_NAME}.ndjson" >> $GITHUB_OUTPUT
+
+      - name: Run benchmark
+        run: |
+          mkdir -p results/github-runner/reference
+          cd ruby && bundle exec ruby bin/resp-bench \
+            --server localhost:6379 \
+            --driver ../${{ matrix.driver }} \
+            --workload ../${{ matrix.workload }} \
+            --metrics ../${{ steps.names.outputs.result_file }} \
+            --commit-id ${{ github.sha }}
+
+      - name: Stop Valkey server
+        if: always()
+        run: |
+          make server-standalone-stop || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-ruby-${{ steps.names.outputs.driver_name }}-${{ steps.names.outputs.workload_name }}
           path: ${{ steps.names.outputs.result_file }}
           retention-days: 30
 
   generate-graphs:
-    needs: benchmark
+    needs: [benchmark-java, benchmark-ruby]
     runs-on: ubuntu-latest
     permissions:
       contents: write

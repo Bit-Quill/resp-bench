@@ -55,6 +55,7 @@ The graphs below show performance comparisons of Java client libraries running o
 | Language | Status | Supported Drivers |
 |----------|--------|-------------------|
 | Java | ✅ Ready | Jedis, Lettuce, Valkey-Glide, Redisson, Spring Data Valkey/Redis |
+| Ruby | ✅ Ready | redis-rb |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 | Go | 📋 Future | go-redis, rueidis |
 | Node.js | 📋 Future | ioredis, node-redis |
@@ -85,6 +86,13 @@ make java-run \
   WORKLOAD=configs/workloads/example-workload.json
 ```
 
+**Ruby:**
+```bash
+make ruby-run \
+  DRIVER=configs/drivers/example-redis-rb-standalone.json \
+  WORKLOAD=configs/workloads/example-workload.json
+```
+
 **Python (when available):**
 ```bash
 make python-run \
@@ -111,6 +119,7 @@ resp-bench/
 │   └── workloads/               # Workload definitions
 ├── config-editor/               # React-based configuration editor UI
 ├── java/                        # Java benchmark engine
+├── ruby/                        # Ruby benchmark engine
 ├── python/                      # Python benchmark engine (planned)
 ├── docs/                        # Documentation
 │   ├── ARCHITECTURE.md          # System architecture
@@ -271,6 +280,15 @@ The script aggregates results using a 3-tuple key: `(commit_id, primary_driver_v
 | `make java-test` | Run unit tests |
 | `make java-run` | Run benchmark (uses DRIVER, WORKLOAD, SERVER vars) |
 | `make java-info` | Show supported drivers and commands |
+
+### Ruby Engine
+
+| Target | Description |
+|--------|-------------|
+| `make ruby-build` | Install Ruby dependencies (bundle install) |
+| `make ruby-test` | Run unit and integration tests |
+| `make ruby-run` | Run benchmark (uses DRIVER, WORKLOAD, SERVER vars) |
+| `make ruby-info` | Show supported drivers and commands |
 
 ### Config Editor
 

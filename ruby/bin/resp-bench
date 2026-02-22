@@ -1,0 +1,135 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+require_relative "../lib/resp_bench"
+
+# CLI for resp-bench Ruby engine
+module RespBench
+  class CLI
+    def initialize(args)
+      @args = args
+      @options = {
+        host: "localhost",
+        port: 6379
+      }
+    end
+
+    def run
+      parse_options
+
+      if @options[:info]
+        print_info
+        return 0
+      end
+
+      validate_options
+
+      execute_benchmark
+      0
+    rescue StandardError => e
+      $stderr.puts "Error: #{e.message}"
+      $stderr.puts e.backtrace.first(5).join("\n") if ENV["DEBUG"]
+      1
+    end
+
+    private
+
+    def parse_options
+      OptionParser.new do |opts|
+        opts.banner = "Usage: resp-bench [options]"
+
+        opts.on("--server HOST:PORT", "Server address (default: localhost:6379)") do |server|
+          host, port = server.split(":")
+          @options[:host] = host
+          @options[:port] = port.to_i if port
+        end
+
+        opts.on("--driver PATH", "Driver configuration file (required)") do |path|
+          @options[:driver] = path
+        end
+
+        opts.on("--workload PATH", "Workload configuration file (required)") do |path|
+          @options[:workload] = path
+        end
+
+        opts.on("--metrics PATH", "Metrics output file (required)") do |path|
+          @options[:metrics] = path
+        end
+
+        opts.on("--commit-id ID", "Git commit ID for metadata") do |id|
+          @options[:commit_id] = id
+        end
+
+        opts.on("--concurrency MODE", "Concurrency mode: 'process' (default) or 'thread'",
+                "  process: fork 1 process per connection (best for local/low-latency servers)",
+                "  thread:  thread-per-client in single process (best for remote/high-latency servers)") do |mode|
+          @options[:concurrency_mode] = mode
+        end
+
+        opts.on("--info", "Show supported drivers and commands") do
+          @options[:info] = true
+        end
+
+        opts.on("-h", "--help", "Show this help message") do
+          puts opts
+          exit 0
+        end
+
+        opts.on("-v", "--version", "Show version") do
+          puts "resp-bench Ruby Engine v#{VERSION}"
+          exit 0
+        end
+      end.parse!(@args)
+    end
+
+    def validate_options
+      missing = []
+      missing << "--driver" unless @options[:driver]
+      missing << "--workload" unless @options[:workload]
+      missing << "--metrics" unless @options[:metrics]
+
+      unless missing.empty?
+        raise ArgumentError, "Missing required options: #{missing.join(', ')}"
+      end
+
+      raise ArgumentError, "Driver config not found: #{@options[:driver]}" unless File.exist?(@options[:driver])
+      raise ArgumentError, "Workload config not found: #{@options[:workload]}" unless File.exist?(@options[:workload])
+    end
+
+    def execute_benchmark
+      driver_config = Config::ConfigLoader.load_driver_config(@options[:driver])
+      workload_config = Config::ConfigLoader.load_workload_config(@options[:workload])
+
+      engine = Engine::BenchmarkEngine.new(
+        host: @options[:host],
+        port: @options[:port],
+        driver_config: driver_config,
+        workload_config: workload_config,
+        metrics_path: @options[:metrics],
+        commit_id: @options[:commit_id],
+        concurrency_mode: @options[:concurrency_mode]
+      )
+
+      engine.run
+    end
+
+    def print_info
+      puts "resp-bench Ruby Engine v#{VERSION}"
+      puts
+      puts "Supported Drivers:"
+      Client::BenchmarkClientFactory.supported_drivers.each do |driver|
+        puts "  - #{driver}"
+      end
+      puts
+      puts "Supported Commands:"
+      Command::CommandFactory.supported_commands.each do |cmd|
+        puts "  - #{cmd}"
+      end
+      puts
+      puts "Concurrency: thread-per-client (max 256 threads)"
+    end
+  end
+end
+
+exit RespBench::CLI.new(ARGV).run

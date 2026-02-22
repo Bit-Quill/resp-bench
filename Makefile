@@ -32,6 +32,7 @@ WORK_DIR=$(shell pwd)/work
 	server-start server-stop \
 	java-build java-test java-run java-clean \
 	python-build python-test python-run python-clean \
+	ruby-build ruby-test ruby-run ruby-clean ruby-info \
 	config-editor-build config-editor-dev
 
 # ============================================================================
@@ -58,6 +59,12 @@ help:
 	@echo "  make python-build           Build Python benchmark engine"
 	@echo "  make python-test            Run Python tests"
 	@echo "  make python-run             Run Python benchmark"
+	@echo ""
+	@echo "Ruby Engine:"
+	@echo "  make ruby-build             Install Ruby dependencies"
+	@echo "  make ruby-test              Run Ruby tests"
+	@echo "  make ruby-run               Run Ruby benchmark (requires DRIVER and WORKLOAD)"
+	@echo "  make ruby-info              Show supported Ruby drivers and commands"
 	@echo ""
 	@echo "Config Editor:"
 	@echo "  make config-editor-build    Build config editor UI"
@@ -310,6 +317,37 @@ python-clean:
 	@echo "Placeholder for: cd python && rm -rf __pycache__ *.egg-info dist build"
 
 # ============================================================================
+# Ruby Engine
+# ============================================================================
+
+ruby-build:
+	cd ruby && bundle install
+
+ruby-test:
+	cd ruby && bundle exec rake test
+
+ruby-unit-test:
+	cd ruby && bundle exec rake unit
+
+ruby-integration-test: server-standalone-start
+	sleep 1
+	cd ruby && VALKEY_HOST=localhost VALKEY_PORT=6379 bundle exec rake integration
+	$(MAKE) server-standalone-stop
+
+ruby-run: ruby-build
+	cd ruby && bundle exec ruby bin/resp-bench \
+		--server $(SERVER) \
+		--driver ../$(DRIVER) \
+		--workload ../$(WORKLOAD) \
+		--metrics ../$(METRICS_OUTPUT)
+
+ruby-clean:
+	cd ruby && rm -rf vendor .bundle Gemfile.lock
+
+ruby-info: ruby-build
+	cd ruby && bundle exec ruby bin/resp-bench --info
+
+# ============================================================================
 # Config Editor
 # ============================================================================
 
@@ -323,8 +361,8 @@ config-editor-dev:
 # All Languages
 # ============================================================================
 
-build-all: java-build python-build
+build-all: java-build ruby-build python-build
 
-test-all: java-test python-test
+test-all: java-test ruby-test python-test
 
-clean-all: java-clean python-clean clean
+clean-all: java-clean ruby-clean python-clean clean

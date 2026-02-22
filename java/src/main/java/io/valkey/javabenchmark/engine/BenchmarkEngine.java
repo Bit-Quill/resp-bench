@@ -40,6 +40,9 @@ public class BenchmarkEngine {
     
     /** Default pipeline depth (max in-flight requests per client) */
     private static final int DEFAULT_PIPELINE_DEPTH = 1;
+    
+    /** Progress logging interval in seconds */
+    private static final int PROGRESS_LOG_INTERVAL_SECONDS = 10;
 
     private final String host;
     private final int port;
@@ -193,6 +196,10 @@ public class BenchmarkEngine {
         
         metrics.start();
         
+        // Progress logging state
+        long lastLogTime = System.currentTimeMillis();
+        long startTime = System.currentTimeMillis();
+        
         try {
             if (completion.isDurationBased()) {
                 // Duration-based completion
@@ -201,6 +208,7 @@ public class BenchmarkEngine {
                 while (System.currentTimeMillis() < endTime && running.get()) {
                     submitRequestWithBackpressure(clientSlots, selector, keyGenerator, rateLimiter, 
                                                    metrics, requestCount, pendingCount, globalSlots);
+                    lastLogTime = logProgressIfNeeded(requestCount.get(), -1, lastLogTime, startTime);
                 }
                 
             } else {
@@ -210,6 +218,7 @@ public class BenchmarkEngine {
                 while (requestCount.get() < targetRequests && running.get()) {
                     submitRequestWithBackpressure(clientSlots, selector, keyGenerator, rateLimiter, 
                                                    metrics, requestCount, pendingCount, globalSlots);
+                    lastLogTime = logProgressIfNeeded(requestCount.get(), targetRequests, lastLogTime, startTime);
                 }
             }
             
@@ -390,6 +399,35 @@ public class BenchmarkEngine {
         }
         
         logger.info("Warmup submitted, proceeding to measured workload (slots occupied by warmup will pace requests)");
+    }
+    
+    /**
+     * Log progress if enough time has elapsed since last log.
+     * 
+     * @param current current request count
+     * @param target target request count (-1 for duration-based completion)
+     * @param lastLogTime timestamp of last log
+     * @param startTime timestamp when workload started
+     * @return updated lastLogTime
+     */
+    private long logProgressIfNeeded(long current, long target, long lastLogTime, long startTime) {
+        long now = System.currentTimeMillis();
+        if (now - lastLogTime < PROGRESS_LOG_INTERVAL_SECONDS * 1000) {
+            return lastLogTime;
+        }
+        
+        long elapsedMs = now - startTime;
+        long rate = elapsedMs > 0 ? (current * 1000 / elapsedMs) : 0;
+        
+        if (target > 0) {
+            double percent = (current * 100.0 / target);
+            logger.info("Progress: {}/{} requests ({} %) - {} req/s", 
+                       current, target, String.format("%.1f", percent), rate);
+        } else {
+            logger.info("Progress: {} requests - {} req/s", current, rate);
+        }
+        
+        return now;
     }
 
     /**
