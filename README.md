@@ -330,6 +330,10 @@ We welcome contributions! See:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Understand the system design
 - [docs/ADDING_LANGUAGE.md](docs/ADDING_LANGUAGE.md) - Add support for a new language
 
+## Author
+
+Authored by Ilia Kolominsky
+
 ## License
 
 Apache License 2.0 - see [LICENSE](LICENSE)
