@@ -22,6 +22,7 @@ jobs:
           - configs/drivers/reference/valkey-glide.json
         workload:
           - configs/workloads/reference/basic-standalone-single-client.json
+          - configs/workloads/reference/basic-standalone-10-clients.json
           - configs/workloads/reference/basic-standalone-100-clients.json
 
     steps:
@@ -96,6 +97,7 @@ jobs:
           - configs/drivers/reference/valkey-glide-ruby.json
         workload:
           - configs/workloads/reference/basic-standalone-single-client.json
+          - configs/workloads/reference/basic-standalone-10-clients.json
           - configs/workloads/reference/basic-standalone-100-clients.json
 
     steps:
@@ -185,22 +187,66 @@ jobs:
           echo "Downloaded results:"
           find results -name "*.ndjson" -type f
 
-      - name: Generate graphs - Single Client
+      # Java graphs — per concurrency level
+      - name: Generate Java graphs - 1 Client
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-single-client.ndjson" \
-            --output graphs/single-client/ \
+            --output graphs/java/1-client/ \
             --phase STEADY \
-            --workload "Single Client" \
+            --language java \
+            --workload "Java - 1 Client" \
             --commit-id ${{ github.sha }}
 
-      - name: Generate graphs - 100 Clients
+      - name: Generate Java graphs - 10 Clients
+        run: |
+          python scripts/generate_graphs.py \
+            --results "results/github-runner/reference/*-basic-standalone-10-clients.ndjson" \
+            --output graphs/java/10-clients/ \
+            --phase STEADY \
+            --language java \
+            --workload "Java - 10 Clients" \
+            --commit-id ${{ github.sha }}
+
+      - name: Generate Java graphs - 100 Clients
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-100-clients.ndjson" \
-            --output graphs/100-clients/ \
+            --output graphs/java/100-clients/ \
             --phase STEADY \
-            --workload "100 Clients" \
+            --language java \
+            --workload "Java - 100 Clients" \
+            --commit-id ${{ github.sha }}
+
+      # Ruby graphs — per concurrency level
+      - name: Generate Ruby graphs - 1 Client
+        run: |
+          python scripts/generate_graphs.py \
+            --results "results/github-runner/reference/*-basic-standalone-single-client.ndjson" \
+            --output graphs/ruby/1-client/ \
+            --phase STEADY \
+            --language ruby \
+            --workload "Ruby - 1 Client" \
+            --commit-id ${{ github.sha }}
+
+      - name: Generate Ruby graphs - 10 Clients
+        run: |
+          python scripts/generate_graphs.py \
+            --results "results/github-runner/reference/*-basic-standalone-10-clients.ndjson" \
+            --output graphs/ruby/10-clients/ \
+            --phase STEADY \
+            --language ruby \
+            --workload "Ruby - 10 Clients" \
+            --commit-id ${{ github.sha }}
+
+      - name: Generate Ruby graphs - 100 Clients
+        run: |
+          python scripts/generate_graphs.py \
+            --results "results/github-runner/reference/*-basic-standalone-100-clients.ndjson" \
+            --output graphs/ruby/100-clients/ \
+            --phase STEADY \
+            --language ruby \
+            --workload "Ruby - 100 Clients" \
             --commit-id ${{ github.sha }}
 
       - name: Upload graphs

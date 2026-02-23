@@ -4,41 +4,45 @@ A multi-language benchmark suite for RESP protocol (Redis/Valkey) compatible dat
 
 ## Performance Comparison
 
-The graphs below show performance comparisons of Java client libraries running on GitHub Actions runners. Results are automatically updated via CI.
+The graphs below show throughput (RPS) comparisons across client libraries, separated by language. Results are automatically updated via CI on GitHub Actions runners.
 
-### Single Client (1 connection)
+### Java Clients
 
-| Throughput |
-|------------|
-| ![SET RPS - Single Client](graphs/single-client/rps-SET.png) |
-| ![GET RPS - Single Client](graphs/single-client/rps-GET.png) |
+#### Single Client (1 connection)
 
-| Latency P50 |
-|-------------|
-| ![SET Latency P50 - Single Client](graphs/single-client/latency-p50-SET.png) |
-| ![GET Latency P50 - Single Client](graphs/single-client/latency-p50-GET.png) |
+![SET RPS - Java 1 Client](graphs/java/1-client/rps-SET.png)
+![GET RPS - Java 1 Client](graphs/java/1-client/rps-GET.png)
 
-| Latency P99 |
-|-------------|
-| ![SET Latency P99 - Single Client](graphs/single-client/latency-p99-SET.png) |
-| ![GET Latency P99 - Single Client](graphs/single-client/latency-p99-GET.png) |
+#### 10 Concurrent Clients
 
-### 100 Concurrent Clients
+![SET RPS - Java 10 Clients](graphs/java/10-clients/rps-SET.png)
+![GET RPS - Java 10 Clients](graphs/java/10-clients/rps-GET.png)
 
-| Throughput |
-|------------|
-| ![SET RPS - 100 Clients](graphs/100-clients/rps-SET.png) |
-| ![GET RPS - 100 Clients](graphs/100-clients/rps-GET.png) |
+#### 100 Concurrent Clients
 
-| Latency P50 |
-|-------------|
-| ![SET Latency P50 - 100 Clients](graphs/100-clients/latency-p50-SET.png) |
-| ![GET Latency P50 - 100 Clients](graphs/100-clients/latency-p50-GET.png) |
+![SET RPS - Java 100 Clients](graphs/java/100-clients/rps-SET.png)
+![GET RPS - Java 100 Clients](graphs/java/100-clients/rps-GET.png)
 
-| Latency P99 |
-|-------------|
-| ![SET Latency P99 - 100 Clients](graphs/100-clients/latency-p99-SET.png) |
-| ![GET Latency P99 - 100 Clients](graphs/100-clients/latency-p99-GET.png) |
+> 📊 [Full Java latency breakdown (p50, p95, p99, p999)](docs/BENCHMARKS_JAVA.md)
+
+### Ruby Clients
+
+#### Single Client (1 connection)
+
+![SET RPS - Ruby 1 Client](graphs/ruby/1-client/rps-SET.png)
+![GET RPS - Ruby 1 Client](graphs/ruby/1-client/rps-GET.png)
+
+#### 10 Concurrent Clients
+
+![SET RPS - Ruby 10 Clients](graphs/ruby/10-clients/rps-SET.png)
+![GET RPS - Ruby 10 Clients](graphs/ruby/10-clients/rps-GET.png)
+
+#### 100 Concurrent Clients
+
+![SET RPS - Ruby 100 Clients](graphs/ruby/100-clients/rps-SET.png)
+![GET RPS - Ruby 100 Clients](graphs/ruby/100-clients/rps-GET.png)
+
+> 📊 [Full Ruby latency breakdown (p50, p95, p99, p999)](docs/BENCHMARKS_RUBY.md)
 
 > **Note**: These benchmarks run on shared GitHub Actions runners. Results may have variance between runs due to noisy neighbor effects. The graphs show averages across multiple runs (n=count shown in labels).
 
@@ -55,7 +59,7 @@ The graphs below show performance comparisons of Java client libraries running o
 | Language | Status | Supported Drivers |
 |----------|--------|-------------------|
 | Java | ✅ Ready | Jedis, Lettuce, Valkey-Glide, Redisson, Spring Data Valkey/Redis |
-| Ruby | ✅ Ready | redis-rb |
+| Ruby | ✅ Ready | redis-rb, valkey-glide-ruby |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 | Go | 📋 Future | go-redis, rueidis |
 | Node.js | 📋 Future | ioredis, node-redis |
@@ -124,7 +128,18 @@ resp-bench/
 ├── docs/                        # Documentation
 │   ├── ARCHITECTURE.md          # System architecture
 │   ├── ADDING_LANGUAGE.md       # Guide for adding new languages
-│   └── CONFIG_SPECIFICATION.md  # Configuration format spec
+│   ├── CONFIG_SPECIFICATION.md  # Configuration format spec
+│   ├── BENCHMARKS_JAVA.md       # Full Java benchmark details (all percentiles)
+│   └── BENCHMARKS_RUBY.md       # Full Ruby benchmark details (all percentiles)
+├── graphs/                      # Auto-generated benchmark graphs
+│   ├── java/                    # Java client graphs
+│   │   ├── 1-client/            # Single client results
+│   │   ├── 10-clients/          # 10 concurrent clients
+│   │   └── 100-clients/         # 100 concurrent clients
+│   └── ruby/                    # Ruby client graphs
+│       ├── 1-client/
+│       ├── 10-clients/
+│       └── 100-clients/
 └── output/                      # Default metrics output directory
 ```
 
@@ -239,14 +254,23 @@ Generate performance comparison graphs from benchmark results:
 # Install Python dependencies
 pip install matplotlib numpy
 
-# Generate graphs from all results (auto-detects latest CI run)
+# Generate graphs for Java clients only
 python scripts/generate_graphs.py \
   --results results/github-runner/reference/*.ndjson \
-  --output graphs/ \
+  --output graphs/java/1-client/ \
   --phase STEADY \
-  --workload "My Benchmark"
+  --language java \
+  --workload "Java - 1 Client"
 
-# Generate graphs for a specific commit
+# Generate graphs for Ruby clients only
+python scripts/generate_graphs.py \
+  --results results/github-runner/reference/*.ndjson \
+  --output graphs/ruby/100-clients/ \
+  --phase STEADY \
+  --language ruby \
+  --workload "Ruby - 100 Clients"
+
+# Generate graphs for a specific commit (all languages)
 python scripts/generate_graphs.py \
   --results results/github-runner/reference/*.ndjson \
   --output graphs/ \

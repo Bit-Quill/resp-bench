@@ -9,18 +9,28 @@ Aggregation Policy:
 - Results are filtered by commit_id to ensure only results from the same CI run are compared
 - If --commit-id is not provided, the script auto-detects it from the git repository
 - Each driver's version is displayed in graph labels but NOT used for filtering
+- Results can be filtered by language using --language to separate graphs per language
 
 Usage:
+    # Generate graphs for all languages together (legacy behavior):
     python generate_graphs.py \
         --results results/github-runner/reference/*.json \
         --output graphs/ \
         --phase STEADY
 
-    # Or with explicit commit filter:
+    # Generate graphs for a specific language only:
     python generate_graphs.py \
         --results results/github-runner/reference/*.json \
-        --output graphs/ \
+        --output graphs/java/ \
         --phase STEADY \
+        --language java
+
+    # With explicit commit filter:
+    python generate_graphs.py \
+        --results results/github-runner/reference/*.json \
+        --output graphs/java/ \
+        --phase STEADY \
+        --language java \
         --commit-id abc123
 
 Author: Ilia Kolominsky
@@ -32,10 +42,32 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Any, NamedTuple
+from typing import Dict, List, Optional, Any, NamedTuple, Set
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+# Mapping from driver_id to language.
+# This is used when --language is specified to filter results.
+DRIVER_LANGUAGE_MAP = {
+    # Java drivers
+    "jedis": "java",
+    "lettuce": "java",
+    "redisson": "java",
+    "valkey-glide": "java",
+    "spring-data-valkey-glide": "java",
+    "spring-data-valkey-jedis": "java",
+    "spring-data-valkey-lettuce": "java",
+    "spring-data-redis-jedis": "java",
+    "spring-data-redis-lettuce": "java",
+    # Ruby drivers
+    "redis-rb": "ruby",
+    "valkey-glide-ruby": "ruby",
+    # Python drivers (future)
+    "redis-py": "python",
+    "aioredis": "python",
+}
 
 
 class AggregationKey(NamedTuple):
@@ -78,14 +110,32 @@ def parse_args():
         help="Filter results by secondary driver version (default: include all versions)",
     )
     parser.add_argument(
+        "--language",
+        choices=["java", "ruby", "python"],
+        help="Filter results by language (only include drivers for this language)",
+    )
+    parser.add_argument(
         "--workload",
         help="Workload name for graph titles",
     )
     return parser.parse_args()
 
 
-def load_results(file_paths: List[str], phase_filter: str) -> List[Dict[str, Any]]:
-    """Load NDJSON result files and extract specified phase data."""
+def get_driver_language(driver_id: str) -> Optional[str]:
+    """Get the language for a driver_id. Returns None if unknown."""
+    return DRIVER_LANGUAGE_MAP.get(driver_id)
+
+
+def load_results(
+    file_paths: List[str],
+    phase_filter: str,
+    language_filter: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Load NDJSON result files and extract specified phase data.
+    
+    If language_filter is provided, only results from drivers matching that
+    language are included.
+    """
     results = []
     
     for file_path in file_paths:
@@ -102,10 +152,19 @@ def load_results(file_paths: List[str], phase_filter: str) -> List[Dict[str, Any
                 try:
                     data = json.loads(line)
                     # Filter by phase
-                    if data.get("phase", {}).get("id") == phase_filter:
-                        # Add source file info
-                        data["_source_file"] = str(path)
-                        results.append(data)
+                    if data.get("phase", {}).get("id") != phase_filter:
+                        continue
+                    
+                    # Filter by language if specified
+                    if language_filter:
+                        driver_id = data.get("metadata", {}).get("driver_id", "")
+                        driver_lang = get_driver_language(driver_id)
+                        if driver_lang != language_filter:
+                            continue
+                    
+                    # Add source file info
+                    data["_source_file"] = str(path)
+                    results.append(data)
                 except json.JSONDecodeError as e:
                     print(f"Warning: JSON parse error in {file_path}:{line_num}: {e}", file=sys.stderr)
     
@@ -393,7 +452,10 @@ def main():
         sys.exit(1)
     
     print(f"Loading {len(all_files)} result file(s)...")
-    results = load_results(all_files, args.phase)
+    if args.language:
+        print(f"Filtering by language: {args.language}")
+    
+    results = load_results(all_files, args.phase, args.language)
     
     if not results:
         print(f"Error: No results found for phase '{args.phase}'", file=sys.stderr)
