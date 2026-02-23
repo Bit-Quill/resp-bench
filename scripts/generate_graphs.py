@@ -56,11 +56,8 @@ DRIVER_LANGUAGE_MAP = {
     "lettuce": "java",
     "redisson": "java",
     "valkey-glide": "java",
-    "spring-data-valkey-glide": "java",
-    "spring-data-valkey-jedis": "java",
-    "spring-data-valkey-lettuce": "java",
-    "spring-data-redis-jedis": "java",
-    "spring-data-redis-lettuce": "java",
+    "spring-data-valkey": "java",
+    "spring-data-redis": "java",
     # Ruby drivers
     "redis-rb": "ruby",
     "valkey-glide-ruby": "ruby",
