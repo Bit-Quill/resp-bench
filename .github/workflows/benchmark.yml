@@ -93,6 +93,7 @@ jobs:
       matrix:
         driver: 
           - configs/drivers/reference/redis-rb.json
+          - configs/drivers/reference/valkey-glide-ruby.json
         workload:
           - configs/workloads/reference/basic-standalone-single-client.json
           - configs/workloads/reference/basic-standalone-100-clients.json

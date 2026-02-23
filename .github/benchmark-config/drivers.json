@@ -11,6 +11,7 @@
         "configs/drivers/reference/valkey-glide-standalone.json"
     ],
     "ruby": [
-        "configs/drivers/reference/redis-rb.json"
+        "configs/drivers/reference/redis-rb.json",
+        "configs/drivers/reference/valkey-glide-ruby.json"
     ]
 }

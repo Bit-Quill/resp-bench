@@ -4,6 +4,13 @@ $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 require "resp_bench"
 require "minitest/autorun"
 
+# All real driver configurations for parameterized integration tests.
+# Mirrors Java's allDrivers() method source in MetricsOutputTest.
+ALL_REAL_DRIVERS = {
+  "redis-rb" => '{"driver_id": "redis-rb", "mode": "standalone"}',
+  "valkey-glide-ruby" => '{"driver_id": "valkey-glide-ruby", "mode": "standalone"}'
+}.freeze
+
 # Test helper methods
 module TestHelper
   # Create a keyspace config for testing

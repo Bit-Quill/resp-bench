@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "description": "valkey-glide-ruby client - standalone mode",
+  "driver_id": "valkey-glide-ruby",
+  "mode": "standalone",
+  "specific_driver_config": {}
+}

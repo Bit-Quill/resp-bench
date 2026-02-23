@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "impl/redis_rb_client"
+require_relative "impl/valkey_glide_client"
 require_relative "impl/recording_client"
 
 module RespBench
@@ -9,8 +10,8 @@ module RespBench
     class BenchmarkClientFactory
       DRIVERS = {
         "redis-rb" => Impl::RedisRbClient,
+        "valkey-glide-ruby" => Impl::ValkeyGlideClient,
         "recording" => Impl::RecordingClient
-        # Future: "valkey-glide" => Impl::ValkeyGlideClient
       }.freeze
 
       class << self

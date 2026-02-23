@@ -7,9 +7,7 @@ Ruby implementation of the resp-bench benchmark suite for Redis/Valkey compatibl
 | Driver ID | Gem | Description |
 |-----------|-----|-------------|
 | `redis-rb` | `redis` | Standard Redis client for Ruby |
-
-**Planned:**
-- `valkey-glide` - Valkey GLIDE client (when available)
+| `valkey-glide-ruby` | `valkey` | Valkey GLIDE client for Ruby ([GitHub](https://github.com/valkey-io/valkey-glide-ruby)) |
 
 ## Installation
 
@@ -81,7 +79,8 @@ lib/resp_bench/
 ├── client/           # Client interface and implementations
 │   ├── benchmark_client.rb       # Abstract interface
 │   └── impl/
-│       └── redis_rb_client.rb    # redis-rb implementation
+│       ├── redis_rb_client.rb    # redis-rb implementation
+│       └── valkey_glide_client.rb # valkey-glide-ruby implementation
 ├── command/          # Command implementations
 │   └── impl/
 │       ├── get_command.rb
@@ -224,6 +223,7 @@ The Ruby engine produces NDJSON output compatible with all other language engine
 ## Dependencies
 
 - `redis` (~> 5.0) - redis-rb client
+- `valkey` (~> 0.1) - valkey-glide-ruby client
 - `concurrent-ruby` - Thread-safe data structures
 - `hdrhistogram` - Latency histograms
 - `oj` - Fast JSON serialization

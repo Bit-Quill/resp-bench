@@ -424,6 +424,27 @@ class ErrorMetricsIntegrationTest < Minitest::Test
     client&.close
   end
 
+  def test_valkey_glide_client_captures_connection_errors
+    config = RespBench::Config::DriverConfig.new(
+      driver_id: "valkey-glide-ruby",
+      mode: "standalone"
+    )
+
+    # Use a port that's unlikely to have a server
+    non_existent_port = 59999
+
+    # valkey-glide may raise during connect or during ping
+    begin
+      client = RespBench::Client::BenchmarkClientFactory.create_and_connect("localhost", non_existent_port, config)
+      refute client.connected?, "Client should not be connected to non-existent server"
+    rescue StandardError
+      # Connection failure during connect is also acceptable
+      pass
+    ensure
+      client&.close
+    end
+  end
+
   # Test: Multiple connections with errors
   def test_multiple_connections_with_errors
     driver_config = parse_driver(<<~JSON)

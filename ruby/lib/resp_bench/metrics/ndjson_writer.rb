@@ -4,6 +4,7 @@ require "json"
 require "base64"
 require "fileutils"
 require "time"
+require_relative "hdr_histogram_encoder"
 
 module RespBench
   module Metrics
@@ -118,11 +119,11 @@ module RespBench
       end
 
       def encode_histogram(histogram)
-        # Encode histogram to base64 using HDRHistogram's native format
-        # This should be compatible with Java's HdrHistogram library
+        # Encode histogram to V2 compressed format compatible with Java's
+        # Histogram.encodeIntoCompressedByteBuffer(), then base64-encode.
         begin
-          encoded = histogram.encode
-          Base64.strict_encode64(encoded)
+          compressed_bytes = HdrHistogramEncoder.encode_compressed(histogram)
+          Base64.strict_encode64(compressed_bytes)
         rescue StandardError => e
           # If encoding fails, return empty string
           ""

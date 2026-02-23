@@ -249,15 +249,16 @@ class MetricsOutputTest < Minitest::Test
     end
   end
 
-  # Test: HDR histogram metadata exists
-  def test_hdr_histogram_metadata_exists
+  # Test: HDR histogram base64 can be decoded
+  # Parity with Java's MetricsOutputTest.histogramBase64CanBeDecoded
+  def test_hdr_histogram_base64_can_be_decoded
     driver_config = recording_driver_config
     workload_config = parse_workload(<<~JSON)
       {
         "benchmark_profile": {"name": "DecodeTest"},
         "phases": [{
           "id": "DECODE_TEST",
-          "description": "Test histogram HDR metadata",
+          "description": "Test histogram decoding",
           "connections": 1,
           "commands": [{"command": "set", "weight": 1.0, "data_size_bytes": 32}],
           "keyspace": {
@@ -275,22 +276,29 @@ class MetricsOutputTest < Minitest::Test
       run_engine(driver_config, workload_config, metrics_file)
       json = parse_metrics(metrics_file)
 
-      # Verify HDR section exists with required metadata
+      # Get base64 payload
       hdr = json.dig("metrics", "SET", "latency", "hdr")
       refute_nil hdr, "hdr section should exist"
-
-      # Verify HDR metadata fields
       assert_equal "hdr", hdr["format"], "format should be 'hdr'"
       assert_equal 3, hdr["sigfig"], "sigfig should be 3"
 
-      # payload_b64 should exist (may be empty if encoding not supported)
-      assert hdr.key?("payload_b64"), "payload_b64 key should exist"
+      base64_payload = hdr["payload_b64"]
+      refute_nil base64_payload, "payload_b64 should exist"
+      refute_empty base64_payload, "payload_b64 should not be empty"
 
-      # If payload is non-empty, verify it's valid base64
-      if hdr["payload_b64"] && !hdr["payload_b64"].empty?
-        decoded = Base64.strict_decode64(hdr["payload_b64"])
-        assert_operator decoded.length, :>, 0, "Decoded payload should have content"
-      end
+      # Decode and verify
+      decoded = Base64.strict_decode64(base64_payload)
+      assert_operator decoded.length, :>, 0, "Decoded payload should have content"
+
+      # Decode the histogram using our V2 compressed decoder
+      decoded_histogram = RespBench::Metrics::HdrHistogramEncoder.decode_compressed(decoded)
+
+      # Verify histogram properties (matching Java's assertions)
+      # Note: Java's histogramBase64CanBeDecoded uses real drivers where min > 0.
+      # Recording client can have sub-microsecond latency (min=0), so we use >= 0 here.
+      assert_equal 100, decoded_histogram.count, "Decoded histogram totalCount should be 100"
+      assert_operator decoded_histogram.min, :>=, 0, "Decoded histogram min should be >= 0"
+      assert_operator decoded_histogram.max, :>, 0, "Decoded histogram max should be > 0"
     end
   end
 
@@ -490,21 +498,19 @@ class MetricsOutputTest < Minitest::Test
     end
   end
 
-  # Test: HDR histogram base64 field is present and summary values are consistent
+  # Test: Full histogram round-trip encode/decode with validation
   # Parity with Java's MetricsOutputTest.histogramBase64CanBeDecoded
   #
-  # Java fully decodes the HDR histogram from base64 and verifies totalCount
-  # and min/max values. Ruby's hdr_histogram gem may not support the encode
-  # method (it returns empty string), so we validate the metadata and summary
-  # fields instead. If payload_b64 is non-empty, we also verify it's valid base64.
-  def test_histogram_summary_values_are_consistent
+  # Decodes the HDR histogram from base64 payload and verifies totalCount,
+  # min, and max values match expectations — exactly as the Java test does.
+  def test_histogram_full_round_trip_encode_decode
     driver_config = recording_driver_config
     workload_config = parse_workload(<<~JSON)
       {
         "benchmark_profile": {"name": "FullDecodeTest"},
         "phases": [{
           "id": "FULL_DECODE_TEST",
-          "description": "Test full histogram decoding",
+          "description": "Test full histogram round-trip",
           "connections": 1,
           "commands": [{"command": "set", "weight": 1.0, "data_size_bytes": 32}],
           "keyspace": {
@@ -522,29 +528,32 @@ class MetricsOutputTest < Minitest::Test
       run_engine(driver_config, workload_config, metrics_file)
       json = parse_metrics(metrics_file)
 
-      # Verify HDR section exists with required metadata
-      hdr = json.dig("metrics", "SET", "latency", "hdr")
-      refute_nil hdr, "hdr section should exist"
-      assert_equal "hdr", hdr["format"]
-      assert_equal 3, hdr["sigfig"]
+      # Get base64 payload
+      base64_payload = json.dig("metrics", "SET", "latency", "hdr", "payload_b64")
+      refute_nil base64_payload, "payload_b64 should exist"
+      refute_empty base64_payload, "payload_b64 should not be empty"
 
-      # payload_b64 should exist (may be empty if Ruby gem doesn't support encode)
-      assert hdr.key?("payload_b64"), "payload_b64 key should exist"
+      # Decode and verify
+      decoded_bytes = Base64.strict_decode64(base64_payload)
+      assert_operator decoded_bytes.length, :>, 0, "Decoded payload should have content"
 
-      # If payload is non-empty, verify it's valid base64
-      if hdr["payload_b64"] && !hdr["payload_b64"].empty?
-        decoded = Base64.strict_decode64(hdr["payload_b64"])
-        assert_operator decoded.length, :>, 0, "Decoded payload should have content"
-      end
+      # Decode the histogram
+      decoded_histogram = RespBench::Metrics::HdrHistogramEncoder.decode_compressed(decoded_bytes)
 
-      # Verify the summary values are consistent with 100 recorded operations
+      # Verify histogram properties (matching Java's assertions)
+      # Note: Recording client can have sub-microsecond latency (min=0)
+      assert_equal 100, decoded_histogram.count, "Decoded histogram totalCount should be 100"
+      assert_operator decoded_histogram.min, :>=, 0, "Decoded histogram min should be >= 0"
+      assert_operator decoded_histogram.max, :>, 0, "Decoded histogram max should be > 0"
+
+      # Also verify summary values are consistent
       count = json.dig("metrics", "SET", "latency", "count")
       assert_equal 100, count, "Latency count should be 100"
 
-      min = json.dig("metrics", "SET", "latency", "summary", "min")
-      max = json.dig("metrics", "SET", "latency", "summary", "max")
-      assert_operator min, :>=, 0, "min should be >= 0"
-      assert_operator max, :>=, min, "max should be >= min"
+      summary_min = json.dig("metrics", "SET", "latency", "summary", "min")
+      summary_max = json.dig("metrics", "SET", "latency", "summary", "max")
+      assert_operator summary_min, :>=, 0, "summary min should be >= 0"
+      assert_operator summary_max, :>=, summary_min, "summary max should be >= min"
     end
   end
 
@@ -597,7 +606,20 @@ class MetricsOutputTest < Minitest::Test
       total_requests_actual = json.dig("totals", "requests")
       assert_equal total_requests, total_requests_actual
 
-      # Get summary values (in microseconds)
+      # Verify we can decode the histogram from payload_b64
+      # (Matching Java's approach: decode first, then validate from decoded histogram)
+      base64_payload = json.dig("metrics", "SET", "latency", "hdr", "payload_b64")
+      refute_nil base64_payload, "payload_b64 should exist"
+      refute_empty base64_payload, "payload_b64 should not be empty"
+
+      decoded_bytes = Base64.strict_decode64(base64_payload)
+      decoded_histogram = RespBench::Metrics::HdrHistogramEncoder.decode_compressed(decoded_bytes)
+
+      # Verify total count is exact (thread-safety fix validation)
+      assert_equal total_requests, decoded_histogram.count,
+                   "Decoded histogram totalCount should equal total requests"
+
+      # Get summary values (in microseconds) from the NDJSON summary
       summary = json.dig("metrics", "SET", "latency", "summary")
       p50_us = summary["p50"]
       p95_us = summary["p95"]
@@ -647,6 +669,134 @@ class MetricsOutputTest < Minitest::Test
       assert_operator p95_us, :<=, p99_us, "p95 <= p99"
       assert_operator p99_us, :<=, p999_us, "p99 <= p999"
       assert_operator p999_us, :<=, max_us, "p999 <= max"
+    end
+  end
+
+  # === Parameterized Real-Driver Tests ===
+  # Mirrors Java's @ParameterizedTest @MethodSource("allDrivers") pattern.
+  # Each test below runs with every real driver (redis-rb, valkey-glide-ruby).
+
+  ALL_REAL_DRIVERS.each do |driver_name, driver_json|
+    safe_name = driver_name.gsub("-", "_")
+
+    define_method("test_ndjson_output_has_valid_format_#{safe_name}") do
+      driver_config = parse_driver(driver_json)
+      workload_config = parse_workload('{"benchmark_profile":{"name":"FormatTest"},"phases":[{"id":"FORMAT_TEST","description":"fmt","connections":1,"commands":[{"command":"set","weight":1.0,"data_size_bytes":32}],"keyspace":{"key_prefix":"fmt:","keys_count":100,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":100}}]}')
+      with_temp_metrics_file("format-#{driver_name}") do |mf|
+        run_engine(driver_config, workload_config, mf)
+        assert File.exist?(mf), "Metrics file should exist"
+        content = File.read(mf).strip
+        refute_empty content
+        lines = content.split("\n")
+        assert_equal 1, lines.size, "Should be a single JSON line"
+        json = JSON.parse(content)
+        assert json.is_a?(Hash)
+      end
+    end
+
+    define_method("test_phase_metadata_is_correct_#{safe_name}") do
+      driver_config = parse_driver(driver_json)
+      workload_config = parse_workload('{"benchmark_profile":{"name":"MetadataTest"},"phases":[{"id":"METADATA_TEST","description":"md","connections":2,"commands":[{"command":"set","weight":1.0,"data_size_bytes":32}],"keyspace":{"key_prefix":"meta:","keys_count":100,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":100}}]}')
+      with_temp_metrics_file("metadata-#{driver_name}") do |mf|
+        run_engine(driver_config, workload_config, mf)
+        json = parse_metrics(mf)
+        assert_equal "METADATA_TEST", json.dig("phase", "id")
+        assert_equal "COMPLETED", json.dig("phase", "status")
+        assert_equal 2, json.dig("phase", "connections")
+        assert_operator json.dig("phase", "duration_ms"), :>, 0
+      end
+    end
+
+    define_method("test_total_request_count_matches_execution_#{safe_name}") do
+      driver_config = parse_driver(driver_json)
+      workload_config = parse_workload('{"benchmark_profile":{"name":"CountTest"},"phases":[{"id":"COUNT_TEST","description":"cnt","connections":1,"commands":[{"command":"set","weight":1.0,"data_size_bytes":32}],"keyspace":{"key_prefix":"count:","keys_count":100,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":1000}}]}')
+      with_temp_metrics_file("count-#{driver_name}") do |mf|
+        run_engine(driver_config, workload_config, mf)
+        json = parse_metrics(mf)
+        assert_equal 1000, json.dig("totals", "requests")
+        assert_equal 1000, json.dig("metrics", "SET", "requests")
+      end
+    end
+
+    define_method("test_histogram_captures_latency_#{safe_name}") do
+      driver_config = parse_driver(driver_json)
+      workload_config = parse_workload('{"benchmark_profile":{"name":"HistTest"},"phases":[{"id":"HIST_TEST","description":"hist","connections":1,"commands":[{"command":"set","weight":1.0,"data_size_bytes":32}],"keyspace":{"key_prefix":"hist:","keys_count":100,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":1000}}]}')
+      with_temp_metrics_file("histogram-#{driver_name}") do |mf|
+        run_engine(driver_config, workload_config, mf)
+        json = parse_metrics(mf)
+        summary = json.dig("metrics", "SET", "latency", "summary")
+        assert_operator summary["min"], :>=, 0
+        assert_operator summary["p50"], :>=, summary["min"]
+        assert_operator summary["p99"], :>=, summary["p95"]
+        assert_equal 0, json.dig("metrics", "SET", "errors"), "#{driver_name} should have no errors"
+        assert_equal 1000, json.dig("metrics", "SET", "latency", "count")
+        assert_equal "us", json.dig("metrics", "SET", "latency", "unit")
+      end
+    end
+
+    define_method("test_per_command_metrics_are_accurate_#{safe_name}") do
+      driver_config = parse_driver(driver_json)
+      workload_config = parse_workload('{"benchmark_profile":{"name":"PerCmdTest"},"phases":[{"id":"MULTI_CMD","description":"percmd","connections":10,"commands":[{"command":"set","weight":0.5,"data_size_bytes":32},{"command":"get","weight":0.5}],"keyspace":{"key_prefix":"percmd:","keys_count":200,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":10000}}]}')
+      with_temp_metrics_file("percmd-#{driver_name}") do |mf|
+        run_engine(driver_config, workload_config, mf)
+        json = parse_metrics(mf)
+        assert_equal 10_000, json.dig("totals", "requests")
+        set_req = json.dig("metrics", "SET", "requests")
+        get_req = json.dig("metrics", "GET", "requests")
+        assert_equal 10_000, set_req + get_req
+        assert_in_delta 5000, set_req, 150
+        assert_equal 0, json.dig("metrics", "SET", "errors"), "#{driver_name} SET should have no errors"
+        assert_equal 0, json.dig("metrics", "GET", "errors"), "#{driver_name} GET should have no errors"
+        assert_equal set_req, json.dig("metrics", "SET", "latency", "count")
+        assert_equal get_req, json.dig("metrics", "GET", "latency", "count")
+      end
+    end
+
+    define_method("test_output_contains_all_required_fields_#{safe_name}") do
+      driver_config = parse_driver(driver_json)
+      workload_config = parse_workload('{"benchmark_profile":{"name":"SchemaTest"},"phases":[{"id":"SCHEMA_TEST","description":"schema","connections":1,"commands":[{"command":"set","weight":1.0,"data_size_bytes":32}],"keyspace":{"key_prefix":"schema:","keys_count":10,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":20}}]}')
+      with_temp_metrics_file("schema-#{driver_name}") do |mf|
+        run_engine(driver_config, workload_config, mf)
+        json = parse_metrics(mf)
+        assert json.key?("phase")
+        assert json["phase"].key?("id")
+        assert json["phase"].key?("status")
+        assert json["phase"].key?("duration_ms")
+        assert json.key?("totals")
+        assert_equal 20, json["totals"]["requests"]
+        set_metrics = json.dig("metrics", "SET")
+        assert set_metrics.key?("latency")
+        assert_equal 20, set_metrics.dig("latency", "count")
+        assert set_metrics["latency"].key?("summary")
+        assert set_metrics["latency"].key?("hdr")
+      end
+    end
+
+    define_method("test_latency_p50_should_be_less_than_1ms_#{safe_name}") do
+      driver_config = parse_driver(driver_json)
+      workload_config = parse_workload('{"benchmark_profile":{"name":"LatValTest"},"phases":[{"id":"LATENCY_VALIDATION","description":"latval","connections":1,"commands":[{"command":"set","weight":0.5,"data_size_bytes":32},{"command":"get","weight":0.5}],"keyspace":{"key_prefix":"latval:","keys_count":100,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":10000}}]}')
+      with_temp_metrics_file("latval-#{driver_name}") do |mf|
+        run_engine(driver_config, workload_config, mf)
+        json = parse_metrics(mf)
+        set_p50 = json.dig("metrics", "SET", "latency", "summary", "p50")
+        get_p50 = json.dig("metrics", "GET", "latency", "summary", "p50")
+        assert_operator set_p50, :<, 1000, "#{driver_name} SET p50 should be < 1ms, was #{set_p50} µs"
+        assert_operator get_p50, :<, 1000, "#{driver_name} GET p50 should be < 1ms, was #{get_p50} µs"
+      end
+    end
+
+    define_method("test_multiple_phases_produce_multiple_lines_#{safe_name}") do
+      driver_config = parse_driver(driver_json)
+      workload_config = parse_workload('{"benchmark_profile":{"name":"MultiPhaseTest"},"phases":[{"id":"PHASE_1","description":"p1","connections":1,"commands":[{"command":"set","weight":1.0,"data_size_bytes":32}],"keyspace":{"key_prefix":"p1:","keys_count":50,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":50}},{"id":"PHASE_2","description":"p2","connections":1,"commands":[{"command":"get","weight":1.0}],"keyspace":{"key_prefix":"p1:","keys_count":50,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":50}},{"id":"PHASE_3","description":"p3","connections":1,"commands":[{"command":"set","weight":1.0,"data_size_bytes":32}],"keyspace":{"key_prefix":"p3:","keys_count":50,"key_size_bytes":16,"generation_alg":"sequential_int"},"completion":{"type":"requests","requests":50}}]}')
+      with_temp_metrics_file("multi-phase-#{driver_name}") do |mf|
+        run_engine(driver_config, workload_config, mf)
+        lines = File.readlines(mf).map(&:strip).reject(&:empty?)
+        assert_equal 3, lines.size, "#{driver_name}: Should have 3 JSON lines for 3 phases"
+        lines.each_with_index do |line, i|
+          json = JSON.parse(line)
+          assert_equal "PHASE_#{i + 1}", json.dig("phase", "id")
+        end
+      end
     end
   end
 
