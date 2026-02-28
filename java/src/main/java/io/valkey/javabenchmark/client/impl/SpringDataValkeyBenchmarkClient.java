@@ -29,16 +29,23 @@ import io.valkey.springframework.data.valkey.connection.lettuce.LettuceClientCon
 import io.valkey.springframework.data.valkey.connection.lettuce.LettuceConnectionFactory;
 import io.valkey.springframework.data.valkey.connection.valkeyglide.ValkeyGlideClientConfiguration;
 import io.valkey.springframework.data.valkey.connection.valkeyglide.ValkeyGlideConnectionFactory;
+import io.valkey.springframework.data.valkey.core.ValkeyCallback;
+import io.valkey.springframework.data.valkey.core.ValkeyTemplate;
+import io.valkey.springframework.data.valkey.serializer.ValkeySerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Spring Data Valkey implementation of BenchmarkClient.
+ * Uses ValkeyTemplate for all operations, which is the standard API surface
+ * that real Spring applications use. This includes the full overhead of
+ * connection pool management, serialization, and template callback execution.
+ * 
  * Supports Jedis, Lettuce, and ValkeyGlide as underlying drivers via secondary_driver_id configuration.
  * Default: ValkeyGlide if secondary_driver_id is not specified.
  *
@@ -49,8 +56,7 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
     private static final Logger logger = LoggerFactory.getLogger(SpringDataValkeyBenchmarkClient.class);
 
     private ValkeyConnectionFactory connectionFactory;
-    private ValkeyConnection connection;
-    private final ReentrantLock connectionLock = new ReentrantLock();
+    private ValkeyTemplate<byte[], byte[]> template;
     private boolean connected;
     private ExecutorService executor;
     private String secondaryDriverId;
@@ -113,17 +119,23 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
                             ". Supported values: jedis, lettuce, valkey-glide");
             }
             
-            // Get connection
-            connection = connectionFactory.getConnection();
+            // Create and configure ValkeyTemplate with byte[] serializers
+            template = new ValkeyTemplate<>();
+            template.setConnectionFactory(connectionFactory);
+            template.setKeySerializer(ValkeySerializer.byteArray());
+            template.setValueSerializer(ValkeySerializer.byteArray());
+            template.setHashKeySerializer(ValkeySerializer.byteArray());
+            template.setHashValueSerializer(ValkeySerializer.byteArray());
+            template.afterPropertiesSet();
             
-            // Test connection
-            String pingResponse = connection.ping();
+            // Test connection via template
+            String pingResponse = template.execute((ValkeyCallback<String>) ValkeyConnection::ping);
             if (!"PONG".equals(pingResponse)) {
                 throw new ClientException("Unexpected ping response: " + pingResponse);
             }
             
             connected = true;
-            logger.info("Spring Data Valkey connected successfully using {}", secondaryDriverId);
+            logger.info("Spring Data Valkey connected successfully using {} (via ValkeyTemplate)", secondaryDriverId);
             
         } catch (ClientException e) {
             throw e;
@@ -280,91 +292,66 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
     @Override
     public CompletableFuture<TimedResult<Void>> set(byte[] key, byte[] value) {
         return CompletableFuture.supplyAsync(() -> {
-            connectionLock.lock();
-            try {
-                long start = System.nanoTime();
-                connection.stringCommands().set(key, value);
-                long latencyMicros = (System.nanoTime() - start) / 1000;
-                return TimedResult.ofVoid(latencyMicros);
-            } finally {
-                connectionLock.unlock();
-            }
+            long start = System.nanoTime();
+            template.opsForValue().set(key, value);
+            long latencyMicros = (System.nanoTime() - start) / 1000;
+            return TimedResult.ofVoid(latencyMicros);
         }, executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<byte[]>> get(byte[] key) {
         return CompletableFuture.supplyAsync(() -> {
-            connectionLock.lock();
-            try {
-                long start = System.nanoTime();
-                byte[] result = connection.stringCommands().get(key);
-                long latencyMicros = (System.nanoTime() - start) / 1000;
-                return TimedResult.of(result, latencyMicros);
-            } finally {
-                connectionLock.unlock();
-            }
+            long start = System.nanoTime();
+            byte[] result = template.opsForValue().get(key);
+            long latencyMicros = (System.nanoTime() - start) / 1000;
+            return TimedResult.of(result, latencyMicros);
         }, executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping() {
         return CompletableFuture.supplyAsync(() -> {
-            connectionLock.lock();
-            try {
-                long start = System.nanoTime();
-                String result = connection.ping();
-                long latencyMicros = (System.nanoTime() - start) / 1000;
-                return TimedResult.of(result, latencyMicros);
-            } finally {
-                connectionLock.unlock();
-            }
+            long start = System.nanoTime();
+            String result = template.execute((ValkeyCallback<String>) ValkeyConnection::ping);
+            long latencyMicros = (System.nanoTime() - start) / 1000;
+            return TimedResult.of(result, latencyMicros);
         }, executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping(byte[] message) {
         return CompletableFuture.supplyAsync(() -> {
-            connectionLock.lock();
-            try {
-                long start = System.nanoTime();
+            long start = System.nanoTime();
+            String result = template.execute((ValkeyCallback<String>) connection -> {
                 byte[] echoResult = connection.echo(message);
-                String result = echoResult != null ? new String(echoResult) : "PONG";
-                long latencyMicros = (System.nanoTime() - start) / 1000;
-                return TimedResult.of(result, latencyMicros);
-            } finally {
-                connectionLock.unlock();
-            }
+                return echoResult != null ? new String(echoResult) : "PONG";
+            });
+            long latencyMicros = (System.nanoTime() - start) / 1000;
+            return TimedResult.of(result, latencyMicros);
         }, executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<Long>> del(byte[]... keys) {
         return CompletableFuture.supplyAsync(() -> {
-            connectionLock.lock();
-            try {
-                long start = System.nanoTime();
-                Long result = connection.keyCommands().del(keys);
-                long latencyMicros = (System.nanoTime() - start) / 1000;
-                return TimedResult.of(result, latencyMicros);
-            } finally {
-                connectionLock.unlock();
-            }
+            long start = System.nanoTime();
+            Long result = template.delete(Arrays.asList(keys));
+            long latencyMicros = (System.nanoTime() - start) / 1000;
+            return TimedResult.of(result, latencyMicros);
         }, executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<Void>> flushDb() {
         return CompletableFuture.supplyAsync(() -> {
-            connectionLock.lock();
-            try {
-                long start = System.nanoTime();
+            long start = System.nanoTime();
+            template.execute((ValkeyCallback<Void>) connection -> {
                 connection.serverCommands().flushDb();
-                long latencyMicros = (System.nanoTime() - start) / 1000;
-                return TimedResult.ofVoid(latencyMicros);
-            } finally {
-                connectionLock.unlock();
-            }
+                return null;
+            });
+            long latencyMicros = (System.nanoTime() - start) / 1000;
+            return TimedResult.ofVoid(latencyMicros);
         }, executor);
     }
 
@@ -373,14 +360,7 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         logger.info("Closing Spring Data Valkey connection ({})", secondaryDriverId);
         connected = false;
         
-        if (connection != null) {
-            try {
-                connection.close();
-            } catch (Exception e) {
-                logger.warn("Error closing connection: {}", e.getMessage());
-            }
-            connection = null;
-        }
+        template = null;
         
         if (connectionFactory instanceof JedisConnectionFactory jedisFactory) {
             try {
