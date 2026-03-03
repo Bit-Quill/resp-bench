@@ -39,12 +39,19 @@ import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Spring Data Valkey implementation of BenchmarkClient.
  * Uses ValkeyTemplate for all operations, which is the standard API surface
  * that real Spring applications use. This includes the full overhead of
  * connection pool management, serialization, and template callback execution.
+ * 
+ * <p>All instances share a single ConnectionFactory and ValkeyTemplate (via a static holder),
+ * modeling how a real Spring application uses one singleton ValkeyTemplate shared across
+ * all concurrent request threads. The first instance to connect creates the shared state;
+ * the last instance to close destroys it.</p>
  * 
  * Supports Jedis, Lettuce, and ValkeyGlide as underlying drivers via secondary_driver_id configuration.
  * Default: ValkeyGlide if secondary_driver_id is not specified.
@@ -55,11 +62,32 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
 
     private static final Logger logger = LoggerFactory.getLogger(SpringDataValkeyBenchmarkClient.class);
 
-    private ValkeyConnectionFactory connectionFactory;
-    private ValkeyTemplate<byte[], byte[]> template;
+    /** Shared state across all instances — models a Spring singleton ValkeyTemplate. */
+    private static final AtomicReference<SharedState> sharedStateRef = new AtomicReference<>();
+    private static final AtomicInteger refCount = new AtomicInteger(0);
+    private static final Object lock = new Object();
+
     private boolean connected;
-    private ExecutorService executor;
     private String secondaryDriverId;
+
+    /**
+     * Holds the shared ConnectionFactory, ValkeyTemplate, and ExecutorService
+     * that are shared across all SpringDataValkeyBenchmarkClient instances.
+     */
+    private static class SharedState {
+        final ValkeyConnectionFactory connectionFactory;
+        final ValkeyTemplate<byte[], byte[]> template;
+        final ExecutorService executor;
+        final String secondaryDriverId;
+
+        SharedState(ValkeyConnectionFactory connectionFactory, ValkeyTemplate<byte[], byte[]> template,
+                    ExecutorService executor, String secondaryDriverId) {
+            this.connectionFactory = connectionFactory;
+            this.template = template;
+            this.executor = executor;
+            this.secondaryDriverId = secondaryDriverId;
+        }
+    }
 
     @Override
     public String getDriverId() {
@@ -92,55 +120,62 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
 
     @Override
     public void connect(String host, int port, DriverConfig driverConfig) throws ClientException {
-        // Get secondary driver id (jedis, lettuce, or valkey-glide)
         this.secondaryDriverId = driverConfig.getSecondaryDriverId();
         if (secondaryDriverId == null || secondaryDriverId.isEmpty()) {
-            secondaryDriverId = "valkey-glide"; // Default to valkey-glide
+            secondaryDriverId = "valkey-glide";
         }
         
-        logger.info("Connecting Spring Data Valkey to {}:{} (cluster={}, secondary_driver={})", 
-                host, port, driverConfig.isClusterMode(), secondaryDriverId);
-        
-        try {
-            this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        synchronized (lock) {
+            int refs = refCount.incrementAndGet();
             
-            switch (secondaryDriverId.toLowerCase()) {
-                case "jedis":
-                    connectionFactory = createJedisConnectionFactory(host, port, driverConfig);
-                    break;
-                case "lettuce":
-                    connectionFactory = createLettuceConnectionFactory(host, port, driverConfig);
-                    break;
-                case "valkey-glide":
-                    connectionFactory = createValkeyGlideConnectionFactory(host, port, driverConfig);
-                    break;
-                default:
-                    throw new ClientException("Unsupported secondary_driver_id for spring-data-valkey: " + secondaryDriverId + 
-                            ". Supported values: jedis, lettuce, valkey-glide");
+            if (sharedStateRef.get() != null) {
+                // Reuse existing shared state
+                connected = true;
+                logger.debug("Reusing shared ValkeyTemplate (ref count: {})", refs);
+                return;
             }
             
-            // Create and configure ValkeyTemplate with byte[] serializers
-            template = new ValkeyTemplate<>();
-            template.setConnectionFactory(connectionFactory);
-            template.setKeySerializer(ValkeySerializer.byteArray());
-            template.setValueSerializer(ValkeySerializer.byteArray());
-            template.setHashKeySerializer(ValkeySerializer.byteArray());
-            template.setHashValueSerializer(ValkeySerializer.byteArray());
-            template.afterPropertiesSet();
+            // First instance — create shared state
+            logger.info("Creating shared Spring Data Valkey infrastructure for {}:{} (cluster={}, secondary_driver={})", 
+                    host, port, driverConfig.isClusterMode(), secondaryDriverId);
             
-            // Test connection via template
-            String pingResponse = template.execute((ValkeyCallback<String>) ValkeyConnection::ping);
-            if (!"PONG".equals(pingResponse)) {
-                throw new ClientException("Unexpected ping response: " + pingResponse);
+            try {
+                ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+                
+                ValkeyConnectionFactory connectionFactory = switch (secondaryDriverId.toLowerCase()) {
+                    case "jedis" -> createJedisConnectionFactory(host, port, driverConfig);
+                    case "lettuce" -> createLettuceConnectionFactory(host, port, driverConfig);
+                    case "valkey-glide" -> createValkeyGlideConnectionFactory(host, port, driverConfig);
+                    default -> throw new ClientException("Unsupported secondary_driver_id for spring-data-valkey: " 
+                            + secondaryDriverId + ". Supported values: jedis, lettuce, valkey-glide");
+                };
+                
+                // Create and configure ValkeyTemplate with byte[] serializers
+                ValkeyTemplate<byte[], byte[]> template = new ValkeyTemplate<>();
+                template.setConnectionFactory(connectionFactory);
+                template.setKeySerializer(ValkeySerializer.byteArray());
+                template.setValueSerializer(ValkeySerializer.byteArray());
+                template.setHashKeySerializer(ValkeySerializer.byteArray());
+                template.setHashValueSerializer(ValkeySerializer.byteArray());
+                template.afterPropertiesSet();
+                
+                // Test connection via template
+                String pingResponse = template.execute((ValkeyCallback<String>) ValkeyConnection::ping);
+                if (!"PONG".equals(pingResponse)) {
+                    throw new ClientException("Unexpected ping response: " + pingResponse);
+                }
+                
+                sharedStateRef.set(new SharedState(connectionFactory, template, executor, secondaryDriverId));
+                connected = true;
+                logger.info("Spring Data Valkey shared infrastructure created using {} (via ValkeyTemplate)", secondaryDriverId);
+                
+            } catch (ClientException e) {
+                refCount.decrementAndGet();
+                throw e;
+            } catch (Exception e) {
+                refCount.decrementAndGet();
+                throw new ClientException("Failed to connect Spring Data Valkey to " + host + ":" + port, e);
             }
-            
-            connected = true;
-            logger.info("Spring Data Valkey connected successfully using {} (via ValkeyTemplate)", secondaryDriverId);
-            
-        } catch (ClientException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ClientException("Failed to connect Spring Data Valkey to " + host + ":" + port, e);
         }
     }
 
@@ -148,7 +183,6 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         JedisClientConfiguration.JedisClientConfigurationBuilder configBuilder =
                 JedisClientConfiguration.builder();
         
-        // Configure TLS if enabled
         if (driverConfig.isTlsEnabled()) {
             configBuilder.useSsl();
         }
@@ -159,8 +193,6 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         if (driverConfig.isClusterMode()) {
             ValkeyClusterConfiguration clusterConfig = new ValkeyClusterConfiguration();
             clusterConfig.addClusterNode(new ValkeyNode(host, port));
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -168,12 +200,9 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
                 }
                 clusterConfig.setPassword(ValkeyPassword.of(auth.getPassword()));
             }
-            
             jedisFactory = new JedisConnectionFactory(clusterConfig, clientConfig);
         } else {
             ValkeyStandaloneConfiguration standaloneConfig = new ValkeyStandaloneConfiguration(host, port);
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -181,11 +210,9 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
                 }
                 standaloneConfig.setPassword(ValkeyPassword.of(auth.getPassword()));
             }
-            
             jedisFactory = new JedisConnectionFactory(standaloneConfig, clientConfig);
         }
         
-        // Initialize the factory
         jedisFactory.afterPropertiesSet();
         jedisFactory.start();
         return jedisFactory;
@@ -195,7 +222,6 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         LettuceClientConfiguration.LettuceClientConfigurationBuilder configBuilder =
                 LettuceClientConfiguration.builder();
         
-        // Configure TLS if enabled
         if (driverConfig.isTlsEnabled()) {
             configBuilder.useSsl();
         }
@@ -206,8 +232,6 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         if (driverConfig.isClusterMode()) {
             ValkeyClusterConfiguration clusterConfig = new ValkeyClusterConfiguration();
             clusterConfig.addClusterNode(new ValkeyNode(host, port));
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -215,12 +239,9 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
                 }
                 clusterConfig.setPassword(ValkeyPassword.of(auth.getPassword()));
             }
-            
             lettuceFactory = new LettuceConnectionFactory(clusterConfig, clientConfig);
         } else {
             ValkeyStandaloneConfiguration standaloneConfig = new ValkeyStandaloneConfiguration(host, port);
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -228,11 +249,9 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
                 }
                 standaloneConfig.setPassword(ValkeyPassword.of(auth.getPassword()));
             }
-            
             lettuceFactory = new LettuceConnectionFactory(standaloneConfig, clientConfig);
         }
         
-        // Initialize the factory
         lettuceFactory.afterPropertiesSet();
         lettuceFactory.start();
         return lettuceFactory;
@@ -242,7 +261,6 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         ValkeyGlideClientConfiguration.ValkeyGlideClientConfigurationBuilder configBuilder =
                 ValkeyGlideClientConfiguration.builder();
         
-        // Configure TLS if enabled
         if (driverConfig.isTlsEnabled()) {
             configBuilder.useSsl();
         }
@@ -253,8 +271,6 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         if (driverConfig.isClusterMode()) {
             ValkeyClusterConfiguration clusterConfig = new ValkeyClusterConfiguration();
             clusterConfig.addClusterNode(new ValkeyNode(host, port));
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -262,12 +278,9 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
                 }
                 clusterConfig.setPassword(ValkeyPassword.of(auth.getPassword()));
             }
-            
             glideFactory = new ValkeyGlideConnectionFactory(clusterConfig, clientConfig);
         } else {
             ValkeyStandaloneConfiguration standaloneConfig = new ValkeyStandaloneConfiguration(host, port);
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -275,11 +288,9 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
                 }
                 standaloneConfig.setPassword(ValkeyPassword.of(auth.getPassword()));
             }
-            
             glideFactory = new ValkeyGlideConnectionFactory(standaloneConfig, clientConfig);
         }
         
-        // Initialize the factory
         glideFactory.afterPropertiesSet();
         return glideFactory;
     }
@@ -289,103 +300,123 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         return connected;
     }
 
+    private SharedState getShared() {
+        return sharedStateRef.get();
+    }
+
     @Override
     public CompletableFuture<TimedResult<Void>> set(byte[] key, byte[] value) {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            template.opsForValue().set(key, value);
+            shared.template.opsForValue().set(key, value);
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.ofVoid(latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<byte[]>> get(byte[] key) {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            byte[] result = template.opsForValue().get(key);
+            byte[] result = shared.template.opsForValue().get(key);
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.of(result, latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping() {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            String result = template.execute((ValkeyCallback<String>) ValkeyConnection::ping);
+            String result = shared.template.execute((ValkeyCallback<String>) ValkeyConnection::ping);
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.of(result, latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping(byte[] message) {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            String result = template.execute((ValkeyCallback<String>) connection -> {
+            String result = shared.template.execute((ValkeyCallback<String>) connection -> {
                 byte[] echoResult = connection.echo(message);
                 return echoResult != null ? new String(echoResult) : "PONG";
             });
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.of(result, latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<Long>> del(byte[]... keys) {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            Long result = template.delete(Arrays.asList(keys));
+            Long result = shared.template.delete(Arrays.asList(keys));
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.of(result, latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<Void>> flushDb() {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            template.execute((ValkeyCallback<Void>) connection -> {
+            shared.template.execute((ValkeyCallback<Void>) connection -> {
                 connection.serverCommands().flushDb();
                 return null;
             });
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.ofVoid(latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public void close() {
-        logger.info("Closing Spring Data Valkey connection ({})", secondaryDriverId);
         connected = false;
         
-        template = null;
-        
-        if (connectionFactory instanceof JedisConnectionFactory jedisFactory) {
-            try {
-                jedisFactory.destroy();
-            } catch (Exception e) {
-                logger.warn("Error destroying Jedis connection factory: {}", e.getMessage());
+        synchronized (lock) {
+            int remaining = refCount.decrementAndGet();
+            
+            if (remaining > 0) {
+                logger.debug("Spring Data Valkey client closed (remaining refs: {})", remaining);
+                return;
             }
-        } else if (connectionFactory instanceof LettuceConnectionFactory lettuceFactory) {
-            try {
-                lettuceFactory.destroy();
-            } catch (Exception e) {
-                logger.warn("Error destroying Lettuce connection factory: {}", e.getMessage());
+            
+            // Last instance — destroy shared state
+            SharedState shared = sharedStateRef.getAndSet(null);
+            if (shared == null) {
+                return;
             }
-        } else if (connectionFactory instanceof ValkeyGlideConnectionFactory glideFactory) {
-            try {
-                glideFactory.destroy();
-            } catch (Exception e) {
-                logger.warn("Error destroying ValkeyGlide connection factory: {}", e.getMessage());
+            
+            logger.info("Closing shared Spring Data Valkey infrastructure ({})", shared.secondaryDriverId);
+            
+            if (shared.connectionFactory instanceof JedisConnectionFactory jedisFactory) {
+                try {
+                    jedisFactory.destroy();
+                } catch (Exception e) {
+                    logger.warn("Error destroying Jedis connection factory: {}", e.getMessage());
+                }
+            } else if (shared.connectionFactory instanceof LettuceConnectionFactory lettuceFactory) {
+                try {
+                    lettuceFactory.destroy();
+                } catch (Exception e) {
+                    logger.warn("Error destroying Lettuce connection factory: {}", e.getMessage());
+                }
+            } else if (shared.connectionFactory instanceof ValkeyGlideConnectionFactory glideFactory) {
+                try {
+                    glideFactory.destroy();
+                } catch (Exception e) {
+                    logger.warn("Error destroying ValkeyGlide connection factory: {}", e.getMessage());
+                }
             }
-        }
-        connectionFactory = null;
-        
-        if (executor != null) {
-            executor.shutdown();
-            executor = null;
+            
+            shared.executor.shutdown();
         }
     }
 }

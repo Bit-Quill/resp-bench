@@ -36,12 +36,19 @@ import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Spring Data Redis implementation of BenchmarkClient.
  * Uses RedisTemplate for all operations, which is the standard API surface
  * that real Spring applications use. This includes the full overhead of
  * connection pool management, serialization, and template callback execution.
+ * 
+ * <p>All instances share a single ConnectionFactory and RedisTemplate (via a static holder),
+ * modeling how a real Spring application uses one singleton RedisTemplate shared across
+ * all concurrent request threads. The first instance to connect creates the shared state;
+ * the last instance to close destroys it.</p>
  * 
  * Supports Jedis and Lettuce as underlying drivers via secondary_driver_id configuration.
  * Default: Jedis if secondary_driver_id is not specified.
@@ -52,11 +59,32 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
 
     private static final Logger logger = LoggerFactory.getLogger(SpringDataRedisBenchmarkClient.class);
 
-    private RedisConnectionFactory connectionFactory;
-    private RedisTemplate<byte[], byte[]> template;
+    /** Shared state across all instances — models a Spring singleton RedisTemplate. */
+    private static final AtomicReference<SharedState> sharedStateRef = new AtomicReference<>();
+    private static final AtomicInteger refCount = new AtomicInteger(0);
+    private static final Object lock = new Object();
+
     private boolean connected;
-    private ExecutorService executor;
     private String secondaryDriverId;
+
+    /**
+     * Holds the shared ConnectionFactory, RedisTemplate, and ExecutorService
+     * that are shared across all SpringDataRedisBenchmarkClient instances.
+     */
+    private static class SharedState {
+        final RedisConnectionFactory connectionFactory;
+        final RedisTemplate<byte[], byte[]> template;
+        final ExecutorService executor;
+        final String secondaryDriverId;
+
+        SharedState(RedisConnectionFactory connectionFactory, RedisTemplate<byte[], byte[]> template,
+                    ExecutorService executor, String secondaryDriverId) {
+            this.connectionFactory = connectionFactory;
+            this.template = template;
+            this.executor = executor;
+            this.secondaryDriverId = secondaryDriverId;
+        }
+    }
 
     @Override
     public String getDriverId() {
@@ -88,52 +116,61 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
 
     @Override
     public void connect(String host, int port, DriverConfig driverConfig) throws ClientException {
-        // Get secondary driver id (jedis or lettuce)
         this.secondaryDriverId = driverConfig.getSecondaryDriverId();
         if (secondaryDriverId == null || secondaryDriverId.isEmpty()) {
-            secondaryDriverId = "jedis"; // Default to jedis
+            secondaryDriverId = "jedis";
         }
         
-        logger.info("Connecting Spring Data Redis to {}:{} (cluster={}, secondary_driver={})", 
-                host, port, driverConfig.isClusterMode(), secondaryDriverId);
-        
-        try {
-            this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        synchronized (lock) {
+            int refs = refCount.incrementAndGet();
             
-            switch (secondaryDriverId.toLowerCase()) {
-                case "jedis":
-                    connectionFactory = createJedisConnectionFactory(host, port, driverConfig);
-                    break;
-                case "lettuce":
-                    connectionFactory = createLettuceConnectionFactory(host, port, driverConfig);
-                    break;
-                default:
-                    throw new ClientException("Unsupported secondary_driver_id for spring-data-redis: " + secondaryDriverId + 
-                            ". Supported values: jedis, lettuce");
+            if (sharedStateRef.get() != null) {
+                // Reuse existing shared state
+                connected = true;
+                logger.debug("Reusing shared RedisTemplate (ref count: {})", refs);
+                return;
             }
             
-            // Create and configure RedisTemplate with byte[] serializers
-            template = new RedisTemplate<>();
-            template.setConnectionFactory(connectionFactory);
-            template.setKeySerializer(RedisSerializer.byteArray());
-            template.setValueSerializer(RedisSerializer.byteArray());
-            template.setHashKeySerializer(RedisSerializer.byteArray());
-            template.setHashValueSerializer(RedisSerializer.byteArray());
-            template.afterPropertiesSet();
+            // First instance — create shared state
+            logger.info("Creating shared Spring Data Redis infrastructure for {}:{} (cluster={}, secondary_driver={})", 
+                    host, port, driverConfig.isClusterMode(), secondaryDriverId);
             
-            // Test connection via template
-            String pingResponse = template.execute((RedisCallback<String>) RedisConnection::ping);
-            if (!"PONG".equals(pingResponse)) {
-                throw new ClientException("Unexpected ping response: " + pingResponse);
+            try {
+                ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+                
+                RedisConnectionFactory connectionFactory = switch (secondaryDriverId.toLowerCase()) {
+                    case "jedis" -> createJedisConnectionFactory(host, port, driverConfig);
+                    case "lettuce" -> createLettuceConnectionFactory(host, port, driverConfig);
+                    default -> throw new ClientException("Unsupported secondary_driver_id for spring-data-redis: " 
+                            + secondaryDriverId + ". Supported values: jedis, lettuce");
+                };
+                
+                // Create and configure RedisTemplate with byte[] serializers
+                RedisTemplate<byte[], byte[]> template = new RedisTemplate<>();
+                template.setConnectionFactory(connectionFactory);
+                template.setKeySerializer(RedisSerializer.byteArray());
+                template.setValueSerializer(RedisSerializer.byteArray());
+                template.setHashKeySerializer(RedisSerializer.byteArray());
+                template.setHashValueSerializer(RedisSerializer.byteArray());
+                template.afterPropertiesSet();
+                
+                // Test connection via template
+                String pingResponse = template.execute((RedisCallback<String>) RedisConnection::ping);
+                if (!"PONG".equals(pingResponse)) {
+                    throw new ClientException("Unexpected ping response: " + pingResponse);
+                }
+                
+                sharedStateRef.set(new SharedState(connectionFactory, template, executor, secondaryDriverId));
+                connected = true;
+                logger.info("Spring Data Redis shared infrastructure created using {} (via RedisTemplate)", secondaryDriverId);
+                
+            } catch (ClientException e) {
+                refCount.decrementAndGet();
+                throw e;
+            } catch (Exception e) {
+                refCount.decrementAndGet();
+                throw new ClientException("Failed to connect Spring Data Redis to " + host + ":" + port, e);
             }
-            
-            connected = true;
-            logger.info("Spring Data Redis connected successfully using {} (via RedisTemplate)", secondaryDriverId);
-            
-        } catch (ClientException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ClientException("Failed to connect Spring Data Redis to " + host + ":" + port, e);
         }
     }
 
@@ -141,7 +178,6 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
         JedisClientConfiguration.JedisClientConfigurationBuilder configBuilder =
                 JedisClientConfiguration.builder();
         
-        // Configure TLS if enabled
         if (driverConfig.isTlsEnabled()) {
             configBuilder.useSsl();
         }
@@ -152,8 +188,6 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
         if (driverConfig.isClusterMode()) {
             RedisClusterConfiguration clusterConfig = new RedisClusterConfiguration();
             clusterConfig.addClusterNode(new RedisNode(host, port));
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -161,12 +195,9 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
                 }
                 clusterConfig.setPassword(RedisPassword.of(auth.getPassword()));
             }
-            
             jedisFactory = new JedisConnectionFactory(clusterConfig, clientConfig);
         } else {
             RedisStandaloneConfiguration standaloneConfig = new RedisStandaloneConfiguration(host, port);
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -174,11 +205,9 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
                 }
                 standaloneConfig.setPassword(RedisPassword.of(auth.getPassword()));
             }
-            
             jedisFactory = new JedisConnectionFactory(standaloneConfig, clientConfig);
         }
         
-        // Initialize the factory
         jedisFactory.afterPropertiesSet();
         return jedisFactory;
     }
@@ -187,7 +216,6 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
         LettuceClientConfiguration.LettuceClientConfigurationBuilder configBuilder =
                 LettuceClientConfiguration.builder();
         
-        // Configure TLS if enabled
         if (driverConfig.isTlsEnabled()) {
             configBuilder.useSsl();
         }
@@ -198,8 +226,6 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
         if (driverConfig.isClusterMode()) {
             RedisClusterConfiguration clusterConfig = new RedisClusterConfiguration();
             clusterConfig.addClusterNode(new RedisNode(host, port));
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -207,12 +233,9 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
                 }
                 clusterConfig.setPassword(RedisPassword.of(auth.getPassword()));
             }
-            
             lettuceFactory = new LettuceConnectionFactory(clusterConfig, clientConfig);
         } else {
             RedisStandaloneConfiguration standaloneConfig = new RedisStandaloneConfiguration(host, port);
-            
-            // Configure authentication if provided
             if (driverConfig.hasAuth()) {
                 DriverConfig.AuthConfig auth = driverConfig.getAuth();
                 if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
@@ -220,11 +243,9 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
                 }
                 standaloneConfig.setPassword(RedisPassword.of(auth.getPassword()));
             }
-            
             lettuceFactory = new LettuceConnectionFactory(standaloneConfig, clientConfig);
         }
         
-        // Initialize the factory
         lettuceFactory.afterPropertiesSet();
         return lettuceFactory;
     }
@@ -234,97 +255,117 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
         return connected;
     }
 
+    private SharedState getShared() {
+        return sharedStateRef.get();
+    }
+
     @Override
     public CompletableFuture<TimedResult<Void>> set(byte[] key, byte[] value) {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            template.opsForValue().set(key, value);
+            shared.template.opsForValue().set(key, value);
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.ofVoid(latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<byte[]>> get(byte[] key) {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            byte[] result = template.opsForValue().get(key);
+            byte[] result = shared.template.opsForValue().get(key);
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.of(result, latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping() {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            String result = template.execute((RedisCallback<String>) RedisConnection::ping);
+            String result = shared.template.execute((RedisCallback<String>) RedisConnection::ping);
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.of(result, latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping(byte[] message) {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            String result = template.execute((RedisCallback<String>) connection -> {
+            String result = shared.template.execute((RedisCallback<String>) connection -> {
                 byte[] echoResult = connection.echo(message);
                 return echoResult != null ? new String(echoResult) : "PONG";
             });
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.of(result, latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<Long>> del(byte[]... keys) {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            Long result = template.delete(Arrays.asList(keys));
+            Long result = shared.template.delete(Arrays.asList(keys));
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.of(result, latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public CompletableFuture<TimedResult<Void>> flushDb() {
+        SharedState shared = getShared();
         return CompletableFuture.supplyAsync(() -> {
             long start = System.nanoTime();
-            template.execute((RedisCallback<Void>) connection -> {
+            shared.template.execute((RedisCallback<Void>) connection -> {
                 connection.serverCommands().flushDb();
                 return null;
             });
             long latencyMicros = (System.nanoTime() - start) / 1000;
             return TimedResult.ofVoid(latencyMicros);
-        }, executor);
+        }, shared.executor);
     }
 
     @Override
     public void close() {
-        logger.info("Closing Spring Data Redis connection ({})", secondaryDriverId);
         connected = false;
         
-        template = null;
-        
-        if (connectionFactory instanceof JedisConnectionFactory jedisFactory) {
-            try {
-                jedisFactory.destroy();
-            } catch (Exception e) {
-                logger.warn("Error destroying Jedis connection factory: {}", e.getMessage());
+        synchronized (lock) {
+            int remaining = refCount.decrementAndGet();
+            
+            if (remaining > 0) {
+                logger.debug("Spring Data Redis client closed (remaining refs: {})", remaining);
+                return;
             }
-        } else if (connectionFactory instanceof LettuceConnectionFactory lettuceFactory) {
-            try {
-                lettuceFactory.destroy();
-            } catch (Exception e) {
-                logger.warn("Error destroying Lettuce connection factory: {}", e.getMessage());
+            
+            // Last instance — destroy shared state
+            SharedState shared = sharedStateRef.getAndSet(null);
+            if (shared == null) {
+                return;
             }
-        }
-        connectionFactory = null;
-        
-        if (executor != null) {
-            executor.shutdown();
-            executor = null;
+            
+            logger.info("Closing shared Spring Data Redis infrastructure ({})", shared.secondaryDriverId);
+            
+            if (shared.connectionFactory instanceof JedisConnectionFactory jedisFactory) {
+                try {
+                    jedisFactory.destroy();
+                } catch (Exception e) {
+                    logger.warn("Error destroying Jedis connection factory: {}", e.getMessage());
+                }
+            } else if (shared.connectionFactory instanceof LettuceConnectionFactory lettuceFactory) {
+                try {
+                    lettuceFactory.destroy();
+                } catch (Exception e) {
+                    logger.warn("Error destroying Lettuce connection factory: {}", e.getMessage());
+                }
+            }
+            
+            shared.executor.shutdown();
         }
     }
 }
