@@ -182,6 +182,16 @@ public class SpringDataRedisBenchmarkClient implements BenchmarkClient {
             configBuilder.useSsl();
         }
         
+        // Enable connection pooling if configured (matches Spring Boot default behavior)
+        if (driverConfig.isUsePooling()) {
+            redis.clients.jedis.JedisPoolConfig poolConfig = new redis.clients.jedis.JedisPoolConfig();
+            poolConfig.setMaxTotal(driverConfig.getPoolSize());
+            poolConfig.setMaxIdle(driverConfig.getPoolSize());
+            configBuilder.usePooling().poolConfig(poolConfig);
+            logger.info("Jedis connection pooling enabled (maxTotal={}, maxIdle={})", 
+                    driverConfig.getPoolSize(), driverConfig.getPoolSize());
+        }
+        
         JedisClientConfiguration clientConfig = configBuilder.build();
         
         JedisConnectionFactory jedisFactory;

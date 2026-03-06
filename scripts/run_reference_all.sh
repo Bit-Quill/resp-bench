@@ -25,18 +25,37 @@ OUTPUT_DIR=$1
 SERVER_HOST=$2
 SERVER="${SERVER_HOST}:6379"
 
-ITER_CNT=5
+ITER_CNT=10
 CLIENT_CNTS=(1 2 4 8 16 32 64)
+#CLIENT_CNTS=(16 32 64)
 DRIVERS=(jedis valkey-glide lettuce redisson spring-data-redis-jedis spring-data-redis-lettuce spring-data-valkey-glide spring-data-valkey-jedis spring-data-valkey-lettuce)
+#DRIVERS=(valkey-glide spring-data-valkey-glide)
 
 TEMPLATE=configs/workloads/reference/basic-standalone-single-client.json
 WORKLOAD_DIR=configs/workloads/reference
+
+# Drivers that have a pool_size config that should match the client count
+POOLED_DRIVERS=(spring-data-valkey-jedis spring-data-valkey-glide spring-data-redis-jedis)
 
 # Generate workload files for each client count from the single-client template
 for client_cnt in "${CLIENT_CNTS[@]}"; do
     WORKLOAD_FILE="${WORKLOAD_DIR}/basic-standalone-${client_cnt}-clients.json"
     cp "$TEMPLATE" "$WORKLOAD_FILE"
     sed -i "s/\"connections\": 1/\"connections\": ${client_cnt}/g" "$WORKLOAD_FILE"
+done
+
+# Generate per-client-count driver configs for pooled drivers (pool_size = client_cnt)
+TMPDIR_DRIVERS=$(mktemp -d)
+trap "rm -rf $TMPDIR_DRIVERS" EXIT
+for client_cnt in "${CLIENT_CNTS[@]}"; do
+    for pooled_driver in "${POOLED_DRIVERS[@]}"; do
+        SRC="configs/drivers/reference/${pooled_driver}.json"
+        if [ -f "$SRC" ]; then
+            mkdir -p "${TMPDIR_DRIVERS}/${client_cnt}"
+            sed "s/\"pool_size\": [0-9]*/\"pool_size\": ${client_cnt}/" "$SRC" \
+                > "${TMPDIR_DRIVERS}/${client_cnt}/${pooled_driver}.json"
+        fi
+    done
 done
 
 # Run benchmarks
@@ -48,9 +67,16 @@ for i in $(seq 1 "$ITER_CNT"); do
             echo "=== iter=$i  clients=$client_cnt  driver=$driver ==="
             redis-cli -h "$SERVER_HOST" -p 6379 flushall
             mkdir -p "$OUTPUT_DIR/${client_cnt}-clients"
+
+            # Use per-client-count driver config if available (pooled drivers), else original
+            DRIVER_FILE="${TMPDIR_DRIVERS}/${client_cnt}/${driver}.json"
+            if [ ! -f "$DRIVER_FILE" ]; then
+                DRIVER_FILE="configs/drivers/reference/${driver}.json"
+            fi
+
             make java-run \
                 SERVER="$SERVER" \
-                DRIVER="configs/drivers/reference/${driver}.json" \
+                DRIVER="$DRIVER_FILE" \
                 WORKLOAD="$WORKLOAD_FILE" \
                 METRICS_OUTPUT="$OUTPUT_DIR/${client_cnt}-clients/${driver}.ndjson"
         done

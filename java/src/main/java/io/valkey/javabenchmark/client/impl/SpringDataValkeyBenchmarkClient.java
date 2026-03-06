@@ -187,6 +187,16 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
             configBuilder.useSsl();
         }
         
+        // Enable connection pooling if configured (matches Spring Boot default behavior)
+        if (driverConfig.isUsePooling()) {
+            redis.clients.jedis.JedisPoolConfig poolConfig = new redis.clients.jedis.JedisPoolConfig();
+            poolConfig.setMaxTotal(driverConfig.getPoolSize());
+            poolConfig.setMaxIdle(driverConfig.getPoolSize());
+            configBuilder.usePooling().poolConfig(poolConfig);
+            logger.info("Jedis connection pooling enabled (maxTotal={}, maxIdle={})", 
+                    driverConfig.getPoolSize(), driverConfig.getPoolSize());
+        }
+        
         JedisClientConfiguration clientConfig = configBuilder.build();
         
         JedisConnectionFactory jedisFactory;
@@ -264,6 +274,10 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
         if (driverConfig.isTlsEnabled()) {
             configBuilder.useSsl();
         }
+        
+        // Configure adapter pool size (default 8, can be set via pool_size in driver config)
+        configBuilder.maxPoolSize(driverConfig.getPoolSize());
+        logger.info("ValkeyGlide adapter pool maxPoolSize={}", driverConfig.getPoolSize());
         
         ValkeyGlideClientConfiguration clientConfig = configBuilder.build();
         

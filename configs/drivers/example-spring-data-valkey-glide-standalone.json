@@ -4,6 +4,7 @@
     "driver_id": "spring-data-valkey",
     "mode": "standalone",
     "specific_driver_config": {
-        "secondary_driver_id": "valkey-glide"
+        "secondary_driver_id": "valkey-glide",
+        "pool_size": 8
     }
 }

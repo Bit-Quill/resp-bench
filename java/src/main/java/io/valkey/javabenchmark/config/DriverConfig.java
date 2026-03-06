@@ -138,6 +138,39 @@ public class DriverConfig {
     }
 
     /**
+     * Check if connection pooling is enabled in specific_driver_config.
+     * Used by Spring Data drivers with Jedis to enable JedisPool (matching Spring Boot defaults).
+     * 
+     * @return true if use_pooling is set to true in specific_driver_config
+     */
+    public boolean isUsePooling() {
+        if (specificDriverConfig != null) {
+            Object value = specificDriverConfig.get("use_pooling");
+            if (value instanceof Boolean) return (Boolean) value;
+            if (value instanceof String) return Boolean.parseBoolean((String) value);
+        }
+        return false;
+    }
+
+    /**
+     * Get the connection pool size from specific_driver_config.
+     * Used by Spring Data drivers (Jedis pool maxTotal, ValkeyGlide adapter pool maxPoolSize).
+     * Defaults to 8, matching Spring Boot / Spring Data defaults.
+     * 
+     * @return pool size (default 8)
+     */
+    public int getPoolSize() {
+        if (specificDriverConfig != null) {
+            Object value = specificDriverConfig.get("pool_size");
+            if (value instanceof Number) return ((Number) value).intValue();
+            if (value instanceof String) {
+                try { return Integer.parseInt((String) value); } catch (NumberFormatException ignored) {}
+            }
+        }
+        return 8; // Spring Boot default
+    }
+
+    /**
      * Get the secondary driver ID for spring-data-* drivers.
      * 
      * @return secondary driver ID or null
