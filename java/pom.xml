@@ -118,6 +118,13 @@
             <version>${redisson.version}</version>
         </dependency>
 
+        <!-- Apache Commons Pool2 - required for Lettuce connection pooling in Spring Data -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+            <version>2.12.0</version>
+        </dependency>
+
         <!-- Test Dependencies -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

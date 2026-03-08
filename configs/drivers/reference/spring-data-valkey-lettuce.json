@@ -4,6 +4,8 @@
     "driver_id": "spring-data-valkey",
     "mode": "standalone",
     "specific_driver_config": {
-        "secondary_driver_id": "lettuce"
+        "secondary_driver_id": "lettuce",
+        "use_pooling": true,
+        "pool_size": 8
     }
 }

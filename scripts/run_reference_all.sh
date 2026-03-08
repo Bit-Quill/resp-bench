@@ -26,7 +26,7 @@ SERVER_HOST=$2
 SERVER="${SERVER_HOST}:6379"
 
 ITER_CNT=10
-CLIENT_CNTS=(1 2 4 8 16 32 64)
+CLIENT_CNTS=(1 2 4 8 16 32 64 128)
 #CLIENT_CNTS=(16 32 64)
 DRIVERS=(jedis valkey-glide lettuce redisson spring-data-redis-jedis spring-data-redis-lettuce spring-data-valkey-glide spring-data-valkey-jedis spring-data-valkey-lettuce)
 #DRIVERS=(valkey-glide spring-data-valkey-glide)
@@ -35,7 +35,7 @@ TEMPLATE=configs/workloads/reference/basic-standalone-single-client.json
 WORKLOAD_DIR=configs/workloads/reference
 
 # Drivers that have a pool_size config that should match the client count
-POOLED_DRIVERS=(spring-data-valkey-jedis spring-data-valkey-glide spring-data-redis-jedis)
+POOLED_DRIVERS=(spring-data-valkey-jedis spring-data-valkey-glide spring-data-redis-jedis spring-data-valkey-lettuce spring-data-redis-lettuce)
 
 # Generate workload files for each client count from the single-client template
 for client_cnt in "${CLIENT_CNTS[@]}"; do

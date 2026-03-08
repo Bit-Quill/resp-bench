@@ -28,6 +28,7 @@ import io.valkey.springframework.data.valkey.connection.jedis.JedisClientConfigu
 import io.valkey.springframework.data.valkey.connection.jedis.JedisConnectionFactory;
 import io.valkey.springframework.data.valkey.connection.lettuce.LettuceClientConfiguration;
 import io.valkey.springframework.data.valkey.connection.lettuce.LettuceConnectionFactory;
+import io.valkey.springframework.data.valkey.connection.lettuce.LettucePoolingClientConfiguration;
 import io.valkey.springframework.data.valkey.connection.valkeyglide.ValkeyGlideClientConfiguration;
 import io.valkey.springframework.data.valkey.connection.valkeyglide.ValkeyGlideConnectionFactory;
 import io.valkey.springframework.data.valkey.core.ValkeyCallback;
@@ -230,14 +231,35 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
     }
 
     private LettuceConnectionFactory createLettuceConnectionFactory(String host, int port, DriverConfig driverConfig) {
-        LettuceClientConfiguration.LettuceClientConfigurationBuilder configBuilder =
-                LettuceClientConfiguration.builder();
+        LettuceClientConfiguration clientConfig;
         
-        if (driverConfig.isTlsEnabled()) {
-            configBuilder.useSsl();
+        if (driverConfig.isUsePooling()) {
+            // Use LettucePoolingClientConfiguration to pool StatefulRedisConnection instances
+            // (matches Spring Boot behavior when spring.redis.lettuce.pool.enabled=true)
+            @SuppressWarnings("rawtypes")
+            org.apache.commons.pool2.impl.GenericObjectPoolConfig poolConfig = 
+                    new org.apache.commons.pool2.impl.GenericObjectPoolConfig();
+            poolConfig.setMaxTotal(driverConfig.getPoolSize());
+            poolConfig.setMaxIdle(driverConfig.getPoolSize());
+            poolConfig.setMinIdle(Math.min(4, driverConfig.getPoolSize()));
+            
+            @SuppressWarnings("unchecked")
+            LettucePoolingClientConfiguration.LettucePoolingClientConfigurationBuilder poolBuilder =
+                    LettucePoolingClientConfiguration.builder().poolConfig(poolConfig);
+            if (driverConfig.isTlsEnabled()) {
+                poolBuilder.useSsl();
+            }
+            clientConfig = poolBuilder.build();
+            logger.info("Lettuce connection pooling enabled (maxTotal={}, maxIdle={})", 
+                    driverConfig.getPoolSize(), driverConfig.getPoolSize());
+        } else {
+            LettuceClientConfiguration.LettuceClientConfigurationBuilder configBuilder =
+                    LettuceClientConfiguration.builder();
+            if (driverConfig.isTlsEnabled()) {
+                configBuilder.useSsl();
+            }
+            clientConfig = configBuilder.build();
         }
-        
-        LettuceClientConfiguration clientConfig = configBuilder.build();
         
         LettuceConnectionFactory lettuceFactory;
         if (driverConfig.isClusterMode()) {
