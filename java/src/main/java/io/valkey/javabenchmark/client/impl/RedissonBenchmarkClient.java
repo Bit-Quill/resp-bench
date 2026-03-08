@@ -15,6 +15,7 @@
  */
 package io.valkey.javabenchmark.client.impl;
 
+import io.valkey.javabenchmark.client.AsyncHelper;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
@@ -146,40 +147,19 @@ public class RedissonBenchmarkClient implements BenchmarkClient {
 
     @Override
     public CompletableFuture<TimedResult<Void>> set(byte[] key, byte[] value) {
-        long start = System.nanoTime();
         String keyStr = new String(key, StandardCharsets.UTF_8);
         String valueStr = new String(value, StandardCharsets.UTF_8);
-        
-        RFuture<Void> future = commandExecutor.writeAsync(
-                keyStr, 
-                StringCodec.INSTANCE, 
-                RedisCommands.SET, 
-                keyStr, 
-                valueStr
+        return AsyncHelper.timedVoid(() ->
+                commandExecutor.writeAsync(keyStr, StringCodec.INSTANCE, RedisCommands.SET, keyStr, valueStr).get()
         );
-        
-        return future.toCompletableFuture().thenApply(v -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
-        });
     }
 
     @Override
     public CompletableFuture<TimedResult<byte[]>> get(byte[] key) {
-        long start = System.nanoTime();
         String keyStr = new String(key, StandardCharsets.UTF_8);
-        
-        RFuture<Object> future = commandExecutor.readAsync(
-                keyStr, 
-                StringCodec.INSTANCE, 
-                RedisCommands.GET, 
-                keyStr
-        );
-        
-        return future.toCompletableFuture().thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            byte[] resultBytes = result != null ? result.toString().getBytes(StandardCharsets.UTF_8) : null;
-            return TimedResult.of(resultBytes, latencyMicros);
+        return AsyncHelper.timed(() -> {
+            Object result = commandExecutor.readAsync(keyStr, StringCodec.INSTANCE, RedisCommands.GET, keyStr).get();
+            return result != null ? result.toString().getBytes(StandardCharsets.UTF_8) : null;
         });
     }
 
@@ -202,67 +182,33 @@ public class RedissonBenchmarkClient implements BenchmarkClient {
 
     @Override
     public CompletableFuture<TimedResult<String>> ping() {
-        long start = System.nanoTime();
-        
-        RFuture<String> future = commandExecutor.readAsync(
-                (String) null, 
-                StringCodec.INSTANCE, 
-                RedisCommands.PING
+        return AsyncHelper.timed(() ->
+                (String) commandExecutor.readAsync((String) null, StringCodec.INSTANCE, RedisCommands.PING).get()
         );
-        
-        return future.toCompletableFuture().thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        });
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping(byte[] message) {
-        long start = System.nanoTime();
         String messageStr = new String(message, StandardCharsets.UTF_8);
-        
-        RFuture<String> future = commandExecutor.readAsync(
-                (String) null, 
-                StringCodec.INSTANCE, 
-                RedisCommands.PING, 
-                messageStr
+        return AsyncHelper.timed(() ->
+                (String) commandExecutor.readAsync((String) null, StringCodec.INSTANCE, RedisCommands.PING, messageStr).get()
         );
-        
-        return future.toCompletableFuture().thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        });
     }
 
     @Override
     public CompletableFuture<TimedResult<Long>> del(byte[]... keys) {
-        long start = System.nanoTime();
         String[] stringKeys = new String[keys.length];
         for (int i = 0; i < keys.length; i++) {
             stringKeys[i] = new String(keys[i], StandardCharsets.UTF_8);
         }
-        
-        RFuture<Long> future = commandExecutor.writeAsync(
-                stringKeys[0], 
-                StringCodec.INSTANCE, 
-                RedisCommands.DEL, 
-                (Object[]) stringKeys
+        return AsyncHelper.timed(() ->
+                (Long) commandExecutor.writeAsync(stringKeys[0], StringCodec.INSTANCE, RedisCommands.DEL, (Object[]) stringKeys).get()
         );
-        
-        return future.toCompletableFuture().thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        });
     }
 
     @Override
     public CompletableFuture<TimedResult<Void>> flushDb() {
-        long start = System.nanoTime();
-        RKeys rKeys = redisson.getKeys();
-        return rKeys.flushdbAsync().toCompletableFuture().thenApply(v -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
-        });
+        return AsyncHelper.timedVoid(() -> redisson.getKeys().flushdbAsync().get());
     }
 
     @Override

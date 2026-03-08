@@ -19,6 +19,7 @@ import glide.api.GlideClient;
 import glide.api.GlideClusterClient;
 import glide.api.models.GlideString;
 import glide.api.models.configuration.*;
+import io.valkey.javabenchmark.client.AsyncHelper;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
@@ -150,55 +151,41 @@ public class ValkeyGlideBenchmarkClient implements BenchmarkClient {
     public CompletableFuture<TimedResult<Void>> set(byte[] key, byte[] value) {
         GlideString gsKey = GlideString.of(key);
         GlideString gsValue = GlideString.of(value);
-        
-        long start = System.nanoTime();
-        CompletableFuture<String> future = isClusterMode 
-                ? glideClusterClient.set(gsKey, gsValue)
-                : glideClient.set(gsKey, gsValue);
-        return future.thenApply(r -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
+        return AsyncHelper.timedVoid(() -> {
+            if (isClusterMode) {
+                glideClusterClient.set(gsKey, gsValue).get();
+            } else {
+                glideClient.set(gsKey, gsValue).get();
+            }
         });
     }
 
     @Override
     public CompletableFuture<TimedResult<byte[]>> get(byte[] key) {
         GlideString gsKey = GlideString.of(key);
-        
-        long start = System.nanoTime();
-        CompletableFuture<GlideString> future = isClusterMode 
-                ? glideClusterClient.get(gsKey)
-                : glideClient.get(gsKey);
-        return future.thenApply(gs -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            byte[] result = gs != null ? gs.getBytes() : null;
-            return TimedResult.of(result, latencyMicros);
+        return AsyncHelper.timed(() -> {
+            GlideString gs = isClusterMode
+                    ? glideClusterClient.get(gsKey).get()
+                    : glideClient.get(gsKey).get();
+            return gs != null ? gs.getBytes() : null;
         });
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping() {
-        long start = System.nanoTime();
-        CompletableFuture<String> future = isClusterMode 
-                ? glideClusterClient.ping()
-                : glideClient.ping();
-        return future.thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        });
+        return AsyncHelper.timed(() -> isClusterMode
+                ? glideClusterClient.ping().get()
+                : glideClient.ping().get());
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping(byte[] message) {
         GlideString gsMessage = GlideString.of(message);
-        
-        long start = System.nanoTime();
-        CompletableFuture<GlideString> future = isClusterMode 
-                ? glideClusterClient.ping(gsMessage)
-                : glideClient.ping(gsMessage);
-        return future.thenApply(gs -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(gs.toString(), latencyMicros);
+        return AsyncHelper.timed(() -> {
+            GlideString gs = isClusterMode
+                    ? glideClusterClient.ping(gsMessage).get()
+                    : glideClient.ping(gsMessage).get();
+            return gs.toString();
         });
     }
 
@@ -208,26 +195,19 @@ public class ValkeyGlideBenchmarkClient implements BenchmarkClient {
         for (int i = 0; i < keys.length; i++) {
             gsKeys[i] = GlideString.of(keys[i]);
         }
-        
-        long start = System.nanoTime();
-        CompletableFuture<Long> future = isClusterMode 
-                ? glideClusterClient.del(gsKeys)
-                : glideClient.del(gsKeys);
-        return future.thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        });
+        return AsyncHelper.timed(() -> isClusterMode
+                ? glideClusterClient.del(gsKeys).get()
+                : glideClient.del(gsKeys).get());
     }
 
     @Override
     public CompletableFuture<TimedResult<Void>> flushDb() {
-        long start = System.nanoTime();
-        CompletableFuture<String> future = isClusterMode 
-                ? glideClusterClient.flushdb()
-                : glideClient.flushdb();
-        return future.thenApply(r -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
+        return AsyncHelper.timedVoid(() -> {
+            if (isClusterMode) {
+                glideClusterClient.flushdb().get();
+            } else {
+                glideClient.flushdb().get();
+            }
         });
     }
 

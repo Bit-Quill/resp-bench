@@ -13,6 +13,7 @@ import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactor
 import io.valkey.springframework.data.valkey.connection.valkeyglide.ValkeyGlideConnectionFactory;
 
 import java.lang.reflect.Field;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -79,9 +80,18 @@ class BenchmarkIntegrationTest {
      * @param expectedFactoryType the expected type of the internal connectionFactory field
      */
     private void assertUnderlyingConnectionFactory(BenchmarkClient client, Class<?> expectedFactoryType) throws Exception {
-        Field connectionFactoryField = client.getClass().getDeclaredField("connectionFactory");
+        // Spring Data clients store connectionFactory inside static SharedState,
+        // accessed via the static sharedStateRef (AtomicReference<SharedState>)
+        Field sharedStateRefField = client.getClass().getDeclaredField("sharedStateRef");
+        sharedStateRefField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        AtomicReference<?> sharedStateRef = (AtomicReference<?>) sharedStateRefField.get(null); // static field
+        Object sharedState = sharedStateRef.get();
+        assertThat(sharedState).describedAs("SharedState should not be null after connect").isNotNull();
+        
+        Field connectionFactoryField = sharedState.getClass().getDeclaredField("connectionFactory");
         connectionFactoryField.setAccessible(true);
-        Object connectionFactory = connectionFactoryField.get(client);
+        Object connectionFactory = connectionFactoryField.get(sharedState);
         
         assertThat(connectionFactory)
             .describedAs("Expected connectionFactory to be %s but was %s", 

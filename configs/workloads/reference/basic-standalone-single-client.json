@@ -2,7 +2,7 @@
     "schema_version": "1.0",
     "benchmark_profile": {
         "name": "Basic Standalone - Single Client",
-        "description": "Reference benchmark: 1M requests, 1M keys, 512B data, 1 connection",
+        "description": "Reference benchmark: 1M requests, 80/20 GET/SET, 1M keys, 16B key, 512B data, 1 connection",
         "version": "1.0.0"
     },
     "phases": [
@@ -32,7 +32,7 @@
         },
         {
             "id": "STEADY",
-            "description": "Steady-state workload with 50% GET, 50% SET",
+            "description": "Steady-state workload with 80% GET, 20% SET",
             "connections": 1,
             "cps_limit": -1,
             "rps_limit": -1,
@@ -50,11 +50,11 @@
             "commands": [
                 {
                     "command": "get",
-                    "weight": 0.5
+                    "weight": 0.8
                 },
                 {
                     "command": "set",
-                    "weight": 0.5,
+                    "weight": 0.2,
                     "data_size_bytes": 512
                 }
             ]

@@ -17,6 +17,7 @@ package io.valkey.javabenchmark.client.impl;
 
 import glide.api.GlideClient;
 import io.lettuce.core.RedisClient;
+import io.valkey.javabenchmark.client.AsyncHelper;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
@@ -321,73 +322,43 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
     @Override
     public CompletableFuture<TimedResult<Void>> set(byte[] key, byte[] value) {
         SharedState shared = getShared();
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            shared.template.opsForValue().set(key, value);
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
-        }, shared.executor);
+        return AsyncHelper.timedVoid(() -> shared.template.opsForValue().set(key, value));
     }
 
     @Override
     public CompletableFuture<TimedResult<byte[]>> get(byte[] key) {
         SharedState shared = getShared();
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            byte[] result = shared.template.opsForValue().get(key);
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        }, shared.executor);
+        return AsyncHelper.timed(() -> shared.template.opsForValue().get(key));
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping() {
         SharedState shared = getShared();
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            String result = shared.template.execute((ValkeyCallback<String>) ValkeyConnection::ping);
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        }, shared.executor);
+        return AsyncHelper.timed(() -> shared.template.execute((ValkeyCallback<String>) ValkeyConnection::ping));
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping(byte[] message) {
         SharedState shared = getShared();
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            String result = shared.template.execute((ValkeyCallback<String>) connection -> {
-                byte[] echoResult = connection.echo(message);
-                return echoResult != null ? new String(echoResult) : "PONG";
-            });
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        }, shared.executor);
+        return AsyncHelper.timed(() -> shared.template.execute((ValkeyCallback<String>) connection -> {
+            byte[] echoResult = connection.echo(message);
+            return echoResult != null ? new String(echoResult) : "PONG";
+        }));
     }
 
     @Override
     public CompletableFuture<TimedResult<Long>> del(byte[]... keys) {
         SharedState shared = getShared();
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            Long result = shared.template.delete(Arrays.asList(keys));
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        }, shared.executor);
+        return AsyncHelper.timed(() -> shared.template.delete(Arrays.asList(keys)));
     }
 
     @Override
     public CompletableFuture<TimedResult<Void>> flushDb() {
         SharedState shared = getShared();
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            shared.template.execute((ValkeyCallback<Void>) connection -> {
-                connection.serverCommands().flushDb();
-                return null;
-            });
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
-        }, shared.executor);
+        return AsyncHelper.timedVoid(() -> shared.template.execute((ValkeyCallback<Void>) connection -> {
+            connection.serverCommands().flushDb();
+            return null;
+        }));
     }
 
     @Override

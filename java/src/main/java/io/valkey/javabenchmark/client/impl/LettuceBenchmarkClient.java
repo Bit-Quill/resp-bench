@@ -22,6 +22,7 @@ import io.lettuce.core.cluster.RedisClusterClient;
 import io.lettuce.core.cluster.api.StatefulRedisClusterConnection;
 import io.lettuce.core.cluster.api.async.RedisAdvancedClusterAsyncCommands;
 import io.lettuce.core.codec.ByteArrayCodec;
+import io.valkey.javabenchmark.client.AsyncHelper;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
@@ -132,75 +133,56 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
 
     @Override
     public CompletableFuture<TimedResult<Void>> set(byte[] key, byte[] value) {
-        long start = System.nanoTime();
-        CompletableFuture<String> future = isClusterMode 
-                ? clusterAsyncCommands.set(key, value).toCompletableFuture()
-                : asyncCommands.set(key, value).toCompletableFuture();
-        return future.thenApply(r -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
+        return AsyncHelper.timedVoid(() -> {
+            if (isClusterMode) {
+                clusterAsyncCommands.set(key, value).get();
+            } else {
+                asyncCommands.set(key, value).get();
+            }
         });
     }
 
     @Override
     public CompletableFuture<TimedResult<byte[]>> get(byte[] key) {
-        long start = System.nanoTime();
-        CompletableFuture<byte[]> future = isClusterMode 
-                ? clusterAsyncCommands.get(key).toCompletableFuture()
-                : asyncCommands.get(key).toCompletableFuture();
-        return future.thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        });
+        return AsyncHelper.timed(() -> isClusterMode
+                ? clusterAsyncCommands.get(key).get()
+                : asyncCommands.get(key).get());
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping() {
-        long start = System.nanoTime();
-        CompletableFuture<String> future = isClusterMode 
-                ? clusterAsyncCommands.ping().toCompletableFuture()
-                : asyncCommands.ping().toCompletableFuture();
-        return future.thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        });
+        return AsyncHelper.timed(() -> isClusterMode
+                ? clusterAsyncCommands.ping().get()
+                : asyncCommands.ping().get());
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping(byte[] message) {
         // Lettuce doesn't have a direct ping with message for byte arrays
         // Use echo as a workaround
-        long start = System.nanoTime();
-        CompletableFuture<byte[]> future = isClusterMode 
-                ? clusterAsyncCommands.echo(message).toCompletableFuture()
-                : asyncCommands.echo(message).toCompletableFuture();
-        return future.thenApply(b -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(new String(b), latencyMicros);
+        return AsyncHelper.timed(() -> {
+            byte[] b = isClusterMode
+                    ? clusterAsyncCommands.echo(message).get()
+                    : asyncCommands.echo(message).get();
+            return new String(b);
         });
     }
 
     @Override
     public CompletableFuture<TimedResult<Long>> del(byte[]... keys) {
-        long start = System.nanoTime();
-        CompletableFuture<Long> future = isClusterMode 
-                ? clusterAsyncCommands.del(keys).toCompletableFuture()
-                : asyncCommands.del(keys).toCompletableFuture();
-        return future.thenApply(result -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        });
+        return AsyncHelper.timed(() -> isClusterMode
+                ? clusterAsyncCommands.del(keys).get()
+                : asyncCommands.del(keys).get());
     }
 
     @Override
     public CompletableFuture<TimedResult<Void>> flushDb() {
-        long start = System.nanoTime();
-        CompletableFuture<String> future = isClusterMode 
-                ? clusterAsyncCommands.flushdb().toCompletableFuture()
-                : asyncCommands.flushdb().toCompletableFuture();
-        return future.thenApply(r -> {
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
+        return AsyncHelper.timedVoid(() -> {
+            if (isClusterMode) {
+                clusterAsyncCommands.flushdb().get();
+            } else {
+                asyncCommands.flushdb().get();
+            }
         });
     }
 

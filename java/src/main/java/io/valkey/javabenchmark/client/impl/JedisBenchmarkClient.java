@@ -15,6 +15,7 @@
  */
 package io.valkey.javabenchmark.client.impl;
 
+import io.valkey.javabenchmark.client.AsyncHelper;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
 import io.valkey.javabenchmark.config.DriverConfig;
@@ -25,8 +26,6 @@ import redis.clients.jedis.*;
 
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * Jedis implementation of BenchmarkClient.
@@ -41,7 +40,6 @@ public class JedisBenchmarkClient implements BenchmarkClient {
     private JedisCluster jedisCluster;
     private boolean isClusterMode;
     private boolean connected;
-    private ExecutorService executor;
 
     @Override
     public String getDriverId() {
@@ -64,7 +62,6 @@ public class JedisBenchmarkClient implements BenchmarkClient {
         
         try {
             this.isClusterMode = driverConfig.isClusterMode();
-            this.executor = Executors.newVirtualThreadPerTaskExecutor();
             
             DefaultJedisClientConfig.Builder configBuilder = DefaultJedisClientConfig.builder();
             
@@ -113,91 +110,59 @@ public class JedisBenchmarkClient implements BenchmarkClient {
 
     @Override
     public CompletableFuture<TimedResult<Void>> set(byte[] key, byte[] value) {
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
+        return AsyncHelper.timedVoid(() -> {
             if (isClusterMode) {
                 jedisCluster.set(key, value);
             } else {
                 jedis.set(key, value);
             }
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
-        }, executor);
+        });
     }
 
     @Override
     public CompletableFuture<TimedResult<byte[]>> get(byte[] key) {
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            byte[] result;
-            if (isClusterMode) {
-                result = jedisCluster.get(key);
-            } else {
-                result = jedis.get(key);
-            }
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        }, executor);
+        return AsyncHelper.timed(() -> isClusterMode
+                ? jedisCluster.get(key)
+                : jedis.get(key));
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping() {
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            String result;
-            if (isClusterMode) {
-                result = jedisCluster.ping();
-            } else {
-                result = jedis.ping();
-            }
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        }, executor);
+        return AsyncHelper.timed(() -> isClusterMode
+                ? jedisCluster.ping()
+                : jedis.ping());
     }
 
     @Override
     public CompletableFuture<TimedResult<String>> ping(byte[] message) {
         // Jedis 5.x does not support ping with message, so we just do regular ping
         // and return the expected message as the response for compatibility
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
+        return AsyncHelper.timed(() -> {
             if (isClusterMode) {
                 jedisCluster.ping();
             } else {
                 jedis.ping();
             }
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(new String(message), latencyMicros);
-        }, executor);
+            return new String(message);
+        });
     }
 
     @Override
     public CompletableFuture<TimedResult<Long>> del(byte[]... keys) {
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            Long result;
-            if (isClusterMode) {
-                result = jedisCluster.del(keys);
-            } else {
-                result = jedis.del(keys);
-            }
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.of(result, latencyMicros);
-        }, executor);
+        return AsyncHelper.timed(() -> isClusterMode
+                ? jedisCluster.del(keys)
+                : jedis.del(keys));
     }
 
     @Override
     public CompletableFuture<TimedResult<Void>> flushDb() {
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
+        return AsyncHelper.timedVoid(() -> {
             if (isClusterMode) {
                 jedisCluster.flushDB();
             } else {
                 jedis.flushDB();
             }
-            long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
-        }, executor);
+        });
     }
 
     @Override
@@ -223,9 +188,5 @@ public class JedisBenchmarkClient implements BenchmarkClient {
             jedisCluster = null;
         }
         
-        if (executor != null) {
-            executor.shutdown();
-            executor = null;
-        }
     }
 }

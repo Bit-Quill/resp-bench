@@ -3,7 +3,14 @@
 Graph generator for resp-bench benchmark results.
 
 Reads NDJSON result files and generates performance comparison graphs
-for RPS (requests per second) and latency percentiles (p50, p95, p99, p999).
+for total RPS (requests per second) and per-command latency percentiles
+(p50, p95, p99, p999).
+
+Uses total workload RPS (totals.requests / phase.duration) rather than
+per-command RPS, because all commands share the same phase timer and
+per-command counts divided by total duration just reflects command weights,
+not actual per-command throughput. Per-command latency is still valid since
+each latency measurement is independent of the phase timer.
 
 Aggregation Policy:
 - Results are filtered by commit_id to ensure only results from the same CI run are compared
@@ -270,8 +277,8 @@ def aggregate_results(
     for label, runs in grouped.items():
         agg = {
             "run_count": len(runs),
+            "total_rps_values": [],
             "commands": defaultdict(lambda: {
-                "rps_values": [],
                 "p50_values": [],
                 "p95_values": [],
                 "p99_values": [],
@@ -281,23 +288,25 @@ def aggregate_results(
         
         for run in runs:
             duration_ms = run.get("phase", {}).get("duration_ms", 1)
-            metrics = run.get("metrics", {})
             
+            # Total RPS from totals.requests (not per-command)
+            total_requests = run.get("totals", {}).get("requests", 0)
+            total_rps = total_requests / (duration_ms / 1000) if duration_ms > 0 else 0
+            agg["total_rps_values"].append(total_rps)
+            
+            # Per-command latency (still valid — each measurement is independent)
+            metrics = run.get("metrics", {})
             for cmd_name, cmd_data in metrics.items():
-                requests = cmd_data.get("requests", 0)
-                rps = requests / (duration_ms / 1000) if duration_ms > 0 else 0
-                
                 latency = cmd_data.get("latency", {}).get("summary", {})
                 
-                agg["commands"][cmd_name]["rps_values"].append(rps)
                 agg["commands"][cmd_name]["p50_values"].append(latency.get("p50", 0))
                 agg["commands"][cmd_name]["p95_values"].append(latency.get("p95", 0))
                 agg["commands"][cmd_name]["p99_values"].append(latency.get("p99", 0))
                 agg["commands"][cmd_name]["p999_values"].append(latency.get("p999", 0))
         
         # Compute averages
+        agg["total_rps_avg"] = np.mean(agg["total_rps_values"]) if agg["total_rps_values"] else 0
         for cmd_name, cmd_data in agg["commands"].items():
-            cmd_data["rps_avg"] = np.mean(cmd_data["rps_values"]) if cmd_data["rps_values"] else 0
             cmd_data["p50_avg"] = np.mean(cmd_data["p50_values"]) if cmd_data["p50_values"] else 0
             cmd_data["p95_avg"] = np.mean(cmd_data["p95_values"]) if cmd_data["p95_values"] else 0
             cmd_data["p99_avg"] = np.mean(cmd_data["p99_values"]) if cmd_data["p99_values"] else 0
@@ -395,24 +404,24 @@ def generate_graphs(
     
     workload_suffix = f" - {workload_name}" if workload_name else ""
     
-    # Generate RPS graphs per command
-    for cmd in sorted(all_commands):
-        rps_data = {}
-        for driver, data in aggregated.items():
-            if cmd in data["commands"]:
-                rps_data[driver] = data["commands"][cmd]["rps_avg"]
-        
-        if rps_data:
-            create_horizontal_bar_chart(
-                rps_data,
-                run_counts,
-                f"Throughput - {cmd} Command{workload_suffix}",
-                "Requests per Second (RPS)",
-                output_dir / f"rps-{cmd}.png",
-                color=rps_color,
-            )
+    # Generate single total RPS chart (not per-command, since all commands
+    # share the same phase timer and per-command RPS just reflects weights)
+    rps_data = {}
+    for driver, data in aggregated.items():
+        rps_data[driver] = data["total_rps_avg"]
     
-    # Generate latency graphs per percentile
+    if rps_data:
+        create_horizontal_bar_chart(
+            rps_data,
+            run_counts,
+            f"Total Workload Throughput{workload_suffix}",
+            "Requests per Second (RPS)",
+            output_dir / "rps-total.png",
+            color=rps_color,
+        )
+    
+    # Generate per-command latency graphs (latency is still valid per-command
+    # since each measurement is independent of the phase timer)
     for percentile, color in latency_colors.items():
         for cmd in sorted(all_commands):
             latency_data = {}
