@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "lettuce client - high-throughput configuration",
+    "driver_id": "lettuce",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

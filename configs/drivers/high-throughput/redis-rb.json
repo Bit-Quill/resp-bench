@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "redis-rb client - high-throughput configuration",
+    "driver_id": "redis-rb",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

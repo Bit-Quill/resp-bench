@@ -11,15 +11,15 @@ jobs:
       fail-fast: false
       matrix:
         driver: 
-          - configs/drivers/reference/jedis.json
-          - configs/drivers/reference/lettuce.json
-          - configs/drivers/reference/redisson.json
-          - configs/drivers/reference/spring-data-redis-jedis.json
-          - configs/drivers/reference/spring-data-redis-lettuce.json
-          - configs/drivers/reference/spring-data-valkey-glide.json
-          - configs/drivers/reference/spring-data-valkey-jedis.json
-          - configs/drivers/reference/spring-data-valkey-lettuce.json
-          - configs/drivers/reference/valkey-glide.json
+          - configs/drivers/default/jedis.json
+          - configs/drivers/default/lettuce.json
+          - configs/drivers/default/redisson.json
+          - configs/drivers/default/spring-data-redis-jedis.json
+          - configs/drivers/default/spring-data-redis-lettuce.json
+          - configs/drivers/default/spring-data-valkey-glide.json
+          - configs/drivers/default/spring-data-valkey-jedis.json
+          - configs/drivers/default/spring-data-valkey-lettuce.json
+          - configs/drivers/default/valkey-glide.json
         workload:
           - configs/workloads/reference/basic-standalone-single-client.json
           - configs/workloads/reference/basic-standalone-10-clients.json
@@ -93,8 +93,8 @@ jobs:
       fail-fast: false
       matrix:
         driver: 
-          - configs/drivers/reference/redis-rb.json
-          - configs/drivers/reference/valkey-glide-ruby.json
+          - configs/drivers/default/redis-rb.json
+          - configs/drivers/default/valkey-glide-ruby.json
         workload:
           - configs/workloads/reference/basic-standalone-single-client.json
           - configs/workloads/reference/basic-standalone-10-clients.json

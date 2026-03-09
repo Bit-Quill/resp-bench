@@ -285,6 +285,13 @@ public class SpringDataValkeyBenchmarkClient implements BenchmarkClient {
             lettuceFactory = new LettuceConnectionFactory(standaloneConfig, clientConfig);
         }
         
+        // Configure shareNativeConnection from driver config.
+        // When true (default), all regular operations use a single shared connection,
+        // bypassing the pool. Set to false to use pooled connections for all operations.
+        boolean shareNative = driverConfig.isShareNativeConnection();
+        lettuceFactory.setShareNativeConnection(shareNative);
+        logger.info("Lettuce shareNativeConnection={} (pooling={})", shareNative, driverConfig.isUsePooling());
+
         lettuceFactory.afterPropertiesSet();
         lettuceFactory.start();
         return lettuceFactory;

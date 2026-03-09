@@ -1,6 +1,6 @@
 {
     "schema_version": "1.0",
-    "description": "Redisson client - reference benchmark configuration",
+    "description": "redisson client - default configuration",
     "driver_id": "redisson",
     "mode": "standalone",
     "specific_driver_config": {}

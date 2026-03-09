@@ -1,6 +1,6 @@
 {
     "schema_version": "1.0",
-    "description": "Spring Data Redis with Jedis driver - reference benchmark configuration",
+    "description": "spring-data-redis with Jedis driver - high-throughput configuration",
     "driver_id": "spring-data-redis",
     "mode": "standalone",
     "specific_driver_config": {

@@ -1,6 +1,6 @@
 {
     "schema_version": "1.0",
-    "description": "Jedis client - reference benchmark configuration",
+    "description": "jedis client - default configuration",
     "driver_id": "jedis",
     "mode": "standalone",
     "specific_driver_config": {}

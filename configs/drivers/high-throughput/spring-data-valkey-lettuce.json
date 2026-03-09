@@ -1,11 +1,12 @@
 {
     "schema_version": "1.0",
-    "description": "Spring Data Valkey with Lettuce driver - standalone mode",
+    "description": "spring-data-valkey with Lettuce driver - high-throughput configuration",
     "driver_id": "spring-data-valkey",
     "mode": "standalone",
     "specific_driver_config": {
         "secondary_driver_id": "lettuce",
         "use_pooling": true,
-        "pool_size": 8
+        "pool_size": 8,
+        "share_native_connection": false
     }
 }

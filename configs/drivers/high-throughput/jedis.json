@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "jedis client - high-throughput configuration",
+    "driver_id": "jedis",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

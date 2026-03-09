@@ -1,6 +1,6 @@
 {
     "schema_version": "1.0",
-    "description": "Valkey-Glide client - standalone mode",
+    "description": "valkey-glide client - high-throughput configuration",
     "driver_id": "valkey-glide",
     "mode": "standalone",
     "specific_driver_config": {}

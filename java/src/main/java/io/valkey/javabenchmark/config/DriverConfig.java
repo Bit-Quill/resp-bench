@@ -153,6 +153,28 @@ public class DriverConfig {
     }
 
     /**
+     * Check if Lettuce's shareNativeConnection is enabled in specific_driver_config.
+     * When true (the default), LettuceConnectionFactory routes all regular (non-blocking,
+     * non-tx) operations through a single shared StatefulRedisConnection, completely
+     * bypassing any configured connection pool for GET/SET commands.
+     * Set to false when using pooling to ensure each getConnection() borrows a dedicated
+     * connection from the pool.
+     * 
+     * <p>Only relevant for Spring Data drivers with Lettuce as the secondary driver.</p>
+     * 
+     * @return true if share_native_connection is set to true or not specified (default true,
+     *         matching LettuceConnectionFactory default)
+     */
+    public boolean isShareNativeConnection() {
+        if (specificDriverConfig != null) {
+            Object value = specificDriverConfig.get("share_native_connection");
+            if (value instanceof Boolean) return (Boolean) value;
+            if (value instanceof String) return Boolean.parseBoolean((String) value);
+        }
+        return true; // LettuceConnectionFactory default
+    }
+
+    /**
      * Get the connection pool size from specific_driver_config.
      * Used by Spring Data drivers (Jedis pool maxTotal, ValkeyGlide adapter pool maxPoolSize).
      * Defaults to 8, matching Spring Boot / Spring Data defaults.

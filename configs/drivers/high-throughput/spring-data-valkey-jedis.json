@@ -1,6 +1,6 @@
 {
     "schema_version": "1.0",
-    "description": "Spring Data Valkey with Jedis driver - standalone mode",
+    "description": "spring-data-valkey with Jedis driver - high-throughput configuration",
     "driver_id": "spring-data-valkey",
     "mode": "standalone",
     "specific_driver_config": {
