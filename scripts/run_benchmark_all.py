@@ -345,6 +345,18 @@ def main():
 
     CPU_MONITOR_INTERVAL = args.cpu_interval
 
+    # Validate driver names against available configs for the chosen profile
+    driver_dir = Path(f"configs/drivers/{args.profile}")
+    if driver_dir.is_dir():
+        available = {p.stem for p in driver_dir.glob("*.json")}
+        invalid = [d for d in DRIVERS if d not in available]
+        if invalid:
+            print(f"Error: Unknown driver(s): {', '.join(invalid)}", file=sys.stderr)
+            print(f"Available drivers for profile '{args.profile}':", file=sys.stderr)
+            for d in sorted(available):
+                print(f"  - {d}", file=sys.stderr)
+            sys.exit(1)
+
     output_dir = Path(args.output_dir)
 
     run_all_benchmarks(args.profile, output_dir, args.server_host, args.port)
