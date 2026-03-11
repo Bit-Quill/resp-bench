@@ -43,6 +43,10 @@ public class Main implements Callable<Integer> {
             description = "Git commit ID for metadata (auto-detected from build, use this to override)")
     private String commitIdOverride;
 
+    @Option(names = {"--command-issuer-threads"},
+            description = "Number of parallel command issuer threads (default: auto = max(1, connections/32), capped at available processors)")
+    private Integer commandIssuerThreads;
+
     @Option(names = {"--info"},
             description = "Show supported drivers and commands")
     private boolean showInfo;
@@ -70,7 +74,7 @@ public class Main implements Callable<Integer> {
         }
 
         // Create and run engine
-        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsPath, commitId);
+        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsPath, commitId, commandIssuerThreads);
         engine.run();
 
         return 0;

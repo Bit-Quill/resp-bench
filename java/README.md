@@ -47,8 +47,13 @@ java -jar target/resp-bench-java-1.0.0-SNAPSHOT.jar \
 ## CLI Options
 
 ```
-Usage: resp-bench [-hV] [--info] [--commit-id=<commitId>] -d=<driverConfig>
+Usage: resp-bench [-hV] [--info] [--commit-id=<commitId>]
+                  [--command-issuer-threads=<N>] -d=<driverConfig>
                   -m=<metricsOutput> -s=<servers> -w=<workloadConfig>
+      --command-issuer-threads=<N>
+                      Number of parallel command issuer threads
+                        (default: auto = max(1, connections/32), capped at
+                        available processors)
       --commit-id=<commitId>
                       Git commit ID for metadata (auto-detected from build)
   -d, --driver=<driverConfig>
@@ -66,6 +71,22 @@ Usage: resp-bench [-hV] [--info] [--commit-id=<commitId>] -d=<driverConfig>
 ```
 
 > **Note**: The `--commit-id` is auto-detected during Maven build from git. Override only when needed.
+
+### Parallel Command Issuers
+
+At high connection counts (128+), a single command-issuing thread can become a CPU bottleneck. The `--command-issuer-threads` flag controls the number of parallel threads that generate and submit commands.
+
+By default, the engine auto-detects an appropriate count: `max(1, connections / 32)`, capped at available processors. For most workloads, the default is optimal. Override only if you observe the command-issuer thread saturating a CPU core in profiling (e.g., via `pidstat -t`).
+
+```bash
+# Example: force 8 command issuer threads for 256 connections
+java -jar target/resp-bench-java-1.0.0-SNAPSHOT.jar \
+  --server localhost:6379 \
+  --driver ../configs/drivers/example-valkey-glide-standalone.json \
+  --workload ../configs/workloads/example-workload.json \
+  --metrics ../output/metrics.ndjson \
+  --command-issuer-threads 8
+```
 
 ## Testing
 

@@ -670,6 +670,327 @@ class MetricsOutputTest {
             .isLessThan(100_000);
     }
 
+    // === Parallel Command Issuer Tests (Recording Client Only) ===
+
+    /**
+     * Validates that multiple parallel command issuer threads produce the exact
+     * target request count with no over-submission.
+     * 
+     * <p>Uses the recording client with 64 connections and forces 4 issuer threads.
+     * The atomic claim mechanism in submitRequestWithBackpressure must ensure
+     * exactly targetRequests are submitted despite concurrent threads.</p>
+     */
+    @Test
+    void parallelIssuersProduceExactRequestCount() throws Exception {
+        final int totalRequests = 10_000;
+        
+        String driverJson = """
+            {
+                "driver_id": "recording",
+                "mode": "standalone",
+                "specific_driver_config": {
+                    "latency_distribution": "log_normal",
+                    "latency_min_ms": 10,
+                    "latency_median_ms": 20,
+                    "latency_p9999_target_ms": 100
+                }
+            }
+            """;
+        
+        String workloadJson = String.format("""
+            {
+                "benchmark_profile": {"name": "ParallelIssuerExactCountTest"},
+                "phases": [{
+                    "id": "PARALLEL_EXACT_COUNT",
+                    "description": "Test exact request count with parallel issuers",
+                    "connections": 64,
+                    "commands": [{"command": "set", "weight": 1.0, "data_size_bytes": 32}],
+                    "keyspace": {
+                        "key_prefix": "pexact:",
+                        "keys_count": 1000,
+                        "key_size_bytes": 16,
+                        "generation_alg": "sequential_int"
+                    },
+                    "completion": {"type": "requests", "requests": %d}
+                }]
+            }
+            """, totalRequests);
+        
+        DriverConfig driver = ConfigLoader.parseDriverConfig(driverJson);
+        WorkloadConfig workload = ConfigLoader.parseWorkloadConfig(workloadJson);
+        
+        Path metricsFile = tempDir.resolve("parallel-exact-count.ndjson");
+        // Force 4 issuer threads
+        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsFile.toString(), null, 4);
+        engine.run();
+        
+        String line = Files.readString(metricsFile).trim();
+        JsonNode json = objectMapper.readTree(line);
+        
+        // Strict exact count assertion — validates atomic claim prevents over-submission
+        assertThat(json.at("/totals/requests").asLong())
+            .describedAs("Parallel issuers must produce exact request count (no over-submission)")
+            .isEqualTo(totalRequests);
+        
+        assertThat(json.at("/metrics/SET/requests").asLong()).isEqualTo(totalRequests);
+        assertThat(json.at("/metrics/SET/latency/count").asLong()).isEqualTo(totalRequests);
+        assertThat(json.at("/phase/status").asText()).isEqualTo("COMPLETED");
+    }
+
+    /**
+     * Validates that parallel command issuers preserve histogram accuracy.
+     * 
+     * <p>Uses the recording client with a known log-normal distribution,
+     * 100 connections and 4 issuer threads. Verifies that concurrent
+     * histogram recording doesn't corrupt the data.</p>
+     */
+    @Test
+    void parallelIssuersPreserveLatencyAccuracy() throws Exception {
+        final int totalRequests = 50_000;
+        final long medianMs = 100;
+        final long p9999TargetMs = 500;
+        
+        String driverJson = String.format("""
+            {
+                "driver_id": "recording",
+                "mode": "standalone",
+                "specific_driver_config": {
+                    "latency_distribution": "log_normal",
+                    "latency_min_ms": 30,
+                    "latency_median_ms": %d,
+                    "latency_p9999_target_ms": %d
+                }
+            }
+            """, medianMs, p9999TargetMs);
+        
+        String workloadJson = String.format("""
+            {
+                "benchmark_profile": {"name": "ParallelIssuerLatencyTest"},
+                "phases": [{
+                    "id": "PARALLEL_LATENCY",
+                    "description": "Test latency accuracy with parallel issuers",
+                    "connections": 100,
+                    "commands": [{"command": "set", "weight": 1.0, "data_size_bytes": 32}],
+                    "keyspace": {
+                        "key_prefix": "plat:",
+                        "keys_count": 1000,
+                        "key_size_bytes": 16,
+                        "generation_alg": "sequential_int"
+                    },
+                    "completion": {"type": "requests", "requests": %d}
+                }]
+            }
+            """, totalRequests);
+        
+        DriverConfig driver = ConfigLoader.parseDriverConfig(driverJson);
+        WorkloadConfig workload = ConfigLoader.parseWorkloadConfig(workloadJson);
+        
+        Path metricsFile = tempDir.resolve("parallel-latency.ndjson");
+        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsFile.toString(), null, 4);
+        engine.run();
+        
+        String line = Files.readString(metricsFile).trim();
+        JsonNode json = objectMapper.readTree(line);
+        
+        // Verify exact count
+        assertThat(json.at("/totals/requests").asLong()).isEqualTo(totalRequests);
+        
+        // Decode histogram and verify percentiles
+        String base64Payload = json.at("/metrics/SET/latency/hdr/payload_b64").asText();
+        byte[] decoded = Base64.getDecoder().decode(base64Payload);
+        ByteBuffer buffer = ByteBuffer.wrap(decoded);
+        Histogram decodedHistogram = Histogram.decodeFromCompressedByteBuffer(buffer, 0);
+        
+        assertThat(decodedHistogram.getTotalCount()).isEqualTo(totalRequests);
+        
+        // Calculate expected p50 from log-normal parameters
+        double mu = Math.log(medianMs);
+        double sigma = (Math.log(p9999TargetMs) - mu) / 3.72;
+        long expectedP50Us = (long) (Math.exp(mu) * 1000); // median in microseconds
+        
+        long actualP50Us = decodedHistogram.getValueAtPercentile(50.0);
+        assertThat(actualP50Us)
+            .describedAs("p50 should be close to expected median (~%d µs) with parallel issuers", expectedP50Us)
+            .isCloseTo(expectedP50Us, withinPercentage(5));
+        
+        // Verify ordering invariant
+        assertThat(decodedHistogram.getValueAtPercentile(50.0))
+            .isLessThanOrEqualTo(decodedHistogram.getValueAtPercentile(95.0));
+        assertThat(decodedHistogram.getValueAtPercentile(95.0))
+            .isLessThanOrEqualTo(decodedHistogram.getValueAtPercentile(99.0));
+    }
+
+    /**
+     * Validates that parallel issuers work correctly when there are fewer
+     * connections than issuer threads (some partitions will be empty).
+     */
+    @Test
+    void parallelIssuersWithFewerConnectionsThanThreads() throws Exception {
+        final int totalRequests = 500;
+        
+        String driverJson = """
+            {
+                "driver_id": "recording",
+                "mode": "standalone",
+                "specific_driver_config": {
+                    "latency_distribution": "log_normal",
+                    "latency_min_ms": 5,
+                    "latency_median_ms": 10,
+                    "latency_p9999_target_ms": 50
+                }
+            }
+            """;
+        
+        String workloadJson = String.format("""
+            {
+                "benchmark_profile": {"name": "ParallelIssuerFewConnsTest"},
+                "phases": [{
+                    "id": "FEW_CONNS",
+                    "description": "Test parallel issuers with fewer connections than threads",
+                    "connections": 2,
+                    "commands": [{"command": "set", "weight": 1.0, "data_size_bytes": 32}],
+                    "keyspace": {
+                        "key_prefix": "fewconn:",
+                        "keys_count": 100,
+                        "key_size_bytes": 16,
+                        "generation_alg": "sequential_int"
+                    },
+                    "completion": {"type": "requests", "requests": %d}
+                }]
+            }
+            """, totalRequests);
+        
+        DriverConfig driver = ConfigLoader.parseDriverConfig(driverJson);
+        WorkloadConfig workload = ConfigLoader.parseWorkloadConfig(workloadJson);
+        
+        Path metricsFile = tempDir.resolve("parallel-few-conns.ndjson");
+        // Force 8 threads with only 2 connections — 6 partitions will be empty
+        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsFile.toString(), null, 8);
+        engine.run();
+        
+        String line = Files.readString(metricsFile).trim();
+        JsonNode json = objectMapper.readTree(line);
+        
+        assertThat(json.at("/totals/requests").asLong()).isEqualTo(totalRequests);
+        assertThat(json.at("/phase/status").asText()).isEqualTo("COMPLETED");
+    }
+
+    /**
+     * Validates that forcing 1 issuer thread (single-threaded path)
+     * still produces exact request counts — baseline sanity check.
+     */
+    @Test
+    void singleIssuerThreadProducesExactCount() throws Exception {
+        final int totalRequests = 5_000;
+        
+        String driverJson = """
+            {
+                "driver_id": "recording",
+                "mode": "standalone",
+                "specific_driver_config": {
+                    "latency_distribution": "log_normal",
+                    "latency_min_ms": 5,
+                    "latency_median_ms": 15,
+                    "latency_p9999_target_ms": 80
+                }
+            }
+            """;
+        
+        String workloadJson = String.format("""
+            {
+                "benchmark_profile": {"name": "SingleIssuerExactCountTest"},
+                "phases": [{
+                    "id": "SINGLE_ISSUER",
+                    "description": "Baseline: single issuer thread exact count",
+                    "connections": 10,
+                    "commands": [
+                        {"command": "set", "weight": 0.5, "data_size_bytes": 32},
+                        {"command": "get", "weight": 0.5}
+                    ],
+                    "keyspace": {
+                        "key_prefix": "single:",
+                        "keys_count": 100,
+                        "key_size_bytes": 16,
+                        "generation_alg": "sequential_int"
+                    },
+                    "completion": {"type": "requests", "requests": %d}
+                }]
+            }
+            """, totalRequests);
+        
+        DriverConfig driver = ConfigLoader.parseDriverConfig(driverJson);
+        WorkloadConfig workload = ConfigLoader.parseWorkloadConfig(workloadJson);
+        
+        Path metricsFile = tempDir.resolve("single-issuer-exact.ndjson");
+        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsFile.toString(), null, 1);
+        engine.run();
+        
+        String line = Files.readString(metricsFile).trim();
+        JsonNode json = objectMapper.readTree(line);
+        
+        assertThat(json.at("/totals/requests").asLong()).isEqualTo(totalRequests);
+        
+        long setRequests = json.at("/metrics/SET/requests").asLong();
+        long getRequests = json.at("/metrics/GET/requests").asLong();
+        assertThat(setRequests + getRequests).isEqualTo(totalRequests);
+        assertThat(json.at("/phase/status").asText()).isEqualTo("COMPLETED");
+    }
+
+    /**
+     * Validates that parallel issuers work with duration-based completion.
+     * All threads should contribute requests and complete cleanly.
+     */
+    @Test
+    void parallelIssuersWithDurationBasedCompletion() throws Exception {
+        String driverJson = """
+            {
+                "driver_id": "recording",
+                "mode": "standalone",
+                "specific_driver_config": {
+                    "latency_distribution": "log_normal",
+                    "latency_min_ms": 5,
+                    "latency_median_ms": 10,
+                    "latency_p9999_target_ms": 50
+                }
+            }
+            """;
+        
+        String workloadJson = """
+            {
+                "benchmark_profile": {"name": "ParallelDurationTest"},
+                "phases": [{
+                    "id": "PARALLEL_DURATION",
+                    "description": "Test parallel issuers with duration-based completion",
+                    "connections": 32,
+                    "commands": [{"command": "set", "weight": 1.0, "data_size_bytes": 32}],
+                    "keyspace": {
+                        "key_prefix": "pdur:",
+                        "keys_count": 500,
+                        "key_size_bytes": 16,
+                        "generation_alg": "sequential_int"
+                    },
+                    "completion": {"type": "duration", "seconds": 2}
+                }]
+            }
+            """;
+        
+        DriverConfig driver = ConfigLoader.parseDriverConfig(driverJson);
+        WorkloadConfig workload = ConfigLoader.parseWorkloadConfig(workloadJson);
+        
+        Path metricsFile = tempDir.resolve("parallel-duration.ndjson");
+        BenchmarkEngine engine = new BenchmarkEngine(host, port, driver, workload, metricsFile.toString(), null, 2);
+        engine.run();
+        
+        String line = Files.readString(metricsFile).trim();
+        JsonNode json = objectMapper.readTree(line);
+        
+        // Duration-based: just verify some requests were made and it completed
+        long totalRequests = json.at("/totals/requests").asLong();
+        assertThat(totalRequests).isGreaterThan(0);
+        assertThat(json.at("/phase/status").asText()).isEqualTo("COMPLETED");
+        assertThat(json.at("/phase/duration_ms").asLong()).isGreaterThanOrEqualTo(1900); // ~2 seconds
+    }
+
     // === Long-Tail Latency Distribution Test (Recording Client Only) ===
 
     @Test

@@ -25,12 +25,18 @@ import java.util.concurrent.atomic.AtomicLong;
  * its in-flight requests. New requests are only submitted when a client
  * has available capacity (controlled by pipeline depth).</p>
  * 
+ * <p>Command generation is parallelized across multiple "command issuer" threads
+ * to avoid a single-threaded bottleneck at high connection counts. Each issuer
+ * thread manages a partition of the client connections with its own semaphore,
+ * key generator, and command selector to minimize cross-thread contention.</p>
+ * 
  * <p>This design ensures:</p>
  * <ul>
  *   <li>Bounded memory usage - max in-flight requests = connections × pipeline_depth</li>
  *   <li>Accurate latency measurement - no queue backlog inflation</li>
  *   <li>Natural backpressure - new requests wait for available slots</li>
  *   <li>Correct behavior for both duration-based and request-based workloads</li>
+ *   <li>Linear scaling of command generation throughput with issuer threads</li>
  * </ul>
  *
  * @author Ilia Kolominsky
@@ -43,6 +49,9 @@ public class BenchmarkEngine {
     
     /** Progress logging interval in seconds */
     private static final int PROGRESS_LOG_INTERVAL_SECONDS = 10;
+    
+    /** Default divisor for auto-computing command issuer threads from connection count */
+    private static final int CONNECTIONS_PER_ISSUER_THREAD = 32;
 
     private final String host;
     private final int port;
@@ -50,23 +59,31 @@ public class BenchmarkEngine {
     private final WorkloadConfig workloadConfig;
     private final NdjsonMetricsWriter metricsWriter;
     private final String commitId;
+    private final Integer commandIssuerThreadsOverride;
     
     // Client reference for version info
     private BenchmarkClient sampleClient;
 
     public BenchmarkEngine(String host, int port, DriverConfig driverConfig,
                           WorkloadConfig workloadConfig, String metricsPath) {
-        this(host, port, driverConfig, workloadConfig, metricsPath, null);
+        this(host, port, driverConfig, workloadConfig, metricsPath, null, null);
     }
 
     public BenchmarkEngine(String host, int port, DriverConfig driverConfig,
                           WorkloadConfig workloadConfig, String metricsPath, String commitId) {
+        this(host, port, driverConfig, workloadConfig, metricsPath, commitId, null);
+    }
+
+    public BenchmarkEngine(String host, int port, DriverConfig driverConfig,
+                          WorkloadConfig workloadConfig, String metricsPath, String commitId,
+                          Integer commandIssuerThreads) {
         this.host = host;
         this.port = port;
         this.driverConfig = driverConfig;
         this.workloadConfig = workloadConfig;
         this.metricsWriter = new NdjsonMetricsWriter(metricsPath);
         this.commitId = commitId;
+        this.commandIssuerThreadsOverride = commandIssuerThreads;
     }
 
     public void run() throws Exception {
@@ -171,6 +188,20 @@ public class BenchmarkEngine {
         return slots;
     }
 
+    /**
+     * Compute the effective number of command issuer threads.
+     * 
+     * <p>Priority: CLI override > auto-detect based on connection count.</p>
+     * <p>Auto-detect: max(1, connections / 32), capped at available processors.</p>
+     */
+    private int computeIssuerThreadCount(int connections) {
+        if (commandIssuerThreadsOverride != null && commandIssuerThreadsOverride > 0) {
+            return commandIssuerThreadsOverride;
+        }
+        int auto = Math.max(1, connections / CONNECTIONS_PER_ISSUER_THREAD);
+        return Math.min(auto, Runtime.getRuntime().availableProcessors());
+    }
+
     private String executeWorkload(PhaseConfig phase, List<ClientSlot> clientSlots,
                                    List<Command> commands, KeyGenerator keyGenerator,
                                    RateLimiter rateLimiter, MetricsCollector metrics) {
@@ -180,53 +211,40 @@ public class BenchmarkEngine {
         AtomicLong requestCount = new AtomicLong(0);
         AtomicLong pendingCount = new AtomicLong(0);
         
-        // Command selector based on weights
-        CommandSelector selector = new CommandSelector(commands);
+        int issuerThreadCount = computeIssuerThreadCount(clientSlots.size());
+        logger.info("Using {} command issuer thread(s) for {} connections", 
+                    issuerThreadCount, clientSlots.size());
         
-        // Create a semaphore representing total available slots across all clients
-        int totalSlots = clientSlots.stream().mapToInt(s -> s.pipelineDepth).sum();
-        Semaphore globalSlots = new Semaphore(totalSlots);
-        
-        // Submit warmup requests BEFORE starting metrics - they occupy slots
-        // and will naturally pace the measured workload
+        // Submit warmup requests BEFORE starting metrics
         int warmupRequests = phase.getWarmupRequests();
         if (warmupRequests > 0) {
-            submitWarmup(clientSlots, warmupRequests, globalSlots);
+            // Use a single global semaphore for warmup (simple, small number of requests)
+            int totalSlots = clientSlots.stream().mapToInt(s -> s.pipelineDepth).sum();
+            Semaphore warmupGlobalSlots = new Semaphore(totalSlots);
+            submitWarmup(clientSlots, warmupRequests, warmupGlobalSlots);
         }
         
         metrics.start();
         
         // Progress logging state
-        long lastLogTime = System.currentTimeMillis();
         long startTime = System.currentTimeMillis();
         
         try {
-            if (completion.isDurationBased()) {
-                // Duration-based completion
-                long endTime = System.currentTimeMillis() + (completion.getDurationSeconds() * 1000);
-                
-                while (System.currentTimeMillis() < endTime && running.get()) {
-                    submitRequestWithBackpressure(clientSlots, selector, keyGenerator, rateLimiter, 
-                                                   metrics, requestCount, pendingCount, globalSlots);
-                    lastLogTime = logProgressIfNeeded(requestCount.get(), -1, lastLogTime, startTime);
-                }
-                
+            if (issuerThreadCount == 1) {
+                // Single-threaded path (optimized: no partitioning overhead)
+                executeSingleThreaded(phase, clientSlots, commands, keyGenerator, rateLimiter,
+                                      metrics, requestCount, pendingCount, running, startTime);
             } else {
-                // Request-based completion
-                long targetRequests = completion.getTotalRequests();
-                
-                while (requestCount.get() < targetRequests && running.get()) {
-                    submitRequestWithBackpressure(clientSlots, selector, keyGenerator, rateLimiter, 
-                                                   metrics, requestCount, pendingCount, globalSlots);
-                    lastLogTime = logProgressIfNeeded(requestCount.get(), targetRequests, lastLogTime, startTime);
-                }
+                // Multi-threaded path with partitioned command issuers
+                executeMultiThreaded(phase, clientSlots, commands, keyGenerator, rateLimiter,
+                                      metrics, requestCount, pendingCount, running, startTime,
+                                      issuerThreadCount);
             }
             
             // Wait for remaining in-flight requests to complete
             long remaining = pendingCount.get();
             if (remaining > 0) {
                 logger.info("Waiting for {} pending operations to complete...", remaining);
-                // Wait by acquiring all slots (they'll be released as requests complete)
                 long waitStart = System.currentTimeMillis();
                 long maxWaitMs = 60_000; // 60 second timeout
                 
@@ -255,11 +273,209 @@ public class BenchmarkEngine {
         return "COMPLETED";
     }
 
-    private void submitRequestWithBackpressure(List<ClientSlot> clientSlots, CommandSelector selector,
+    /**
+     * Single-threaded command issuer (original behavior, no partitioning overhead).
+     */
+    private void executeSingleThreaded(PhaseConfig phase, List<ClientSlot> clientSlots,
+                                        List<Command> commands, KeyGenerator keyGenerator,
+                                        RateLimiter rateLimiter, MetricsCollector metrics,
+                                        AtomicLong requestCount, AtomicLong pendingCount,
+                                        AtomicBoolean running, long startTime) 
+            throws InterruptedException {
+        
+        Thread.currentThread().setName("command-issuer");
+        
+        CompletionConfig completion = phase.getCompletion();
+        CommandSelector selector = new CommandSelector(commands);
+        int totalSlots = clientSlots.stream().mapToInt(s -> s.pipelineDepth).sum();
+        Semaphore globalSlots = new Semaphore(totalSlots);
+        long lastLogTime = System.currentTimeMillis();
+        
+        if (completion.isDurationBased()) {
+            long endTime = System.currentTimeMillis() + (completion.getDurationSeconds() * 1000);
+            
+            while (System.currentTimeMillis() < endTime && running.get()) {
+                submitRequestWithBackpressure(clientSlots, selector, keyGenerator, rateLimiter, 
+                                               metrics, requestCount, pendingCount, globalSlots, -1);
+                lastLogTime = logProgressIfNeeded(requestCount.get(), -1, lastLogTime, startTime);
+            }
+        } else {
+            long targetRequests = completion.getTotalRequests();
+            
+            while (running.get()) {
+                boolean submitted = submitRequestWithBackpressure(clientSlots, selector, keyGenerator, rateLimiter, 
+                                               metrics, requestCount, pendingCount, globalSlots, targetRequests);
+                if (!submitted) break;
+                lastLogTime = logProgressIfNeeded(requestCount.get(), targetRequests, lastLogTime, startTime);
+            }
+        }
+    }
+
+    /**
+     * Multi-threaded command issuer with partitioned client slots.
+     * 
+     * <p>Partitions the client slots among N issuer threads. Each thread gets:</p>
+     * <ul>
+     *   <li>Its own subset of ClientSlots</li>
+     *   <li>Its own Semaphore (permits = sum of pipeline depths in partition)</li>
+     *   <li>Its own KeyGenerator (forked with unique seed per thread)</li>
+     *   <li>Its own CommandSelector (independent Random)</li>
+     * </ul>
+     * 
+     * <p>Shared across all threads (already thread-safe):</p>
+     * <ul>
+     *   <li>AtomicLong requestCount — for total tracking and request-based completion</li>
+     *   <li>AtomicLong pendingCount — for drain tracking</li>
+     *   <li>MetricsCollector — uses SynchronizedHistogram and ConcurrentHashMap</li>
+     *   <li>RateLimiter — uses Semaphore internally</li>
+     * </ul>
+     */
+    private void executeMultiThreaded(PhaseConfig phase, List<ClientSlot> clientSlots,
+                                       List<Command> commands, KeyGenerator keyGenerator,
+                                       RateLimiter rateLimiter, MetricsCollector metrics,
+                                       AtomicLong requestCount, AtomicLong pendingCount,
+                                       AtomicBoolean running, long startTime,
+                                       int issuerThreadCount) throws Exception {
+        
+        CompletionConfig completion = phase.getCompletion();
+        
+        // Partition client slots into roughly equal groups
+        List<List<ClientSlot>> partitions = partitionList(clientSlots, issuerThreadCount);
+        
+        ExecutorService issuerPool = Executors.newFixedThreadPool(issuerThreadCount, new ThreadFactory() {
+            private int counter = 0;
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "command-issuer-" + counter++);
+                t.setDaemon(true);
+                return t;
+            }
+        });
+        
+        List<Future<?>> futures = new ArrayList<>();
+        
+        for (int i = 0; i < partitions.size(); i++) {
+            final int threadIndex = i;
+            final List<ClientSlot> partition = partitions.get(i);
+            
+            if (partition.isEmpty()) {
+                continue; // Skip empty partitions (more threads than clients)
+            }
+            
+            // Each thread gets its own key generator, command selector, and semaphore
+            final KeyGenerator threadKeyGen = keyGenerator.forkForThread(threadIndex);
+            final CommandSelector threadSelector = new CommandSelector(commands);
+            final int partitionSlots = partition.stream().mapToInt(s -> s.pipelineDepth).sum();
+            final Semaphore partitionSemaphore = new Semaphore(partitionSlots);
+            
+            futures.add(issuerPool.submit(() -> {
+                Thread.currentThread().setName("command-issuer-" + threadIndex);
+                long lastLogTime = System.currentTimeMillis();
+                
+                try {
+                    if (completion.isDurationBased()) {
+                        long endTime = System.currentTimeMillis() + (completion.getDurationSeconds() * 1000);
+                        
+                        while (System.currentTimeMillis() < endTime && running.get()) {
+                            submitRequestWithBackpressure(partition, threadSelector, threadKeyGen, 
+                                                           rateLimiter, metrics, requestCount, 
+                                                           pendingCount, partitionSemaphore, -1);
+                        }
+                    } else {
+                        long targetRequests = completion.getTotalRequests();
+                        
+                        while (running.get()) {
+                            boolean submitted = submitRequestWithBackpressure(partition, threadSelector, threadKeyGen, 
+                                                           rateLimiter, metrics, requestCount, 
+                                                           pendingCount, partitionSemaphore, targetRequests);
+                            if (!submitted) break;
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (Exception e) {
+                    logger.error("Error in command-issuer-{}: {}", threadIndex, e.getMessage());
+                    running.set(false);
+                }
+            }));
+        }
+        
+        // Progress logging from main thread while issuers run
+        CompletionConfig comp = phase.getCompletion();
+        long lastLogTime = System.currentTimeMillis();
+        boolean allDone = false;
+        
+        while (!allDone) {
+            allDone = true;
+            for (Future<?> f : futures) {
+                if (!f.isDone()) {
+                    allDone = false;
+                    break;
+                }
+            }
+            if (!allDone) {
+                Thread.sleep(100);
+                long target = comp.isDurationBased() ? -1 : comp.getTotalRequests();
+                lastLogTime = logProgressIfNeeded(requestCount.get(), target, lastLogTime, startTime);
+            }
+        }
+        
+        // Check for exceptions
+        for (Future<?> f : futures) {
+            f.get(); // Propagates exceptions
+        }
+        
+        issuerPool.shutdown();
+        issuerPool.awaitTermination(5, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Partition a list into N roughly equal sublists.
+     */
+    private <T> List<List<T>> partitionList(List<T> list, int partitions) {
+        List<List<T>> result = new ArrayList<>(partitions);
+        int size = list.size();
+        int baseSize = size / partitions;
+        int remainder = size % partitions;
+        
+        int offset = 0;
+        for (int i = 0; i < partitions; i++) {
+            int partSize = baseSize + (i < remainder ? 1 : 0);
+            result.add(list.subList(offset, offset + partSize));
+            offset += partSize;
+        }
+        return result;
+    }
+
+    /**
+     * Submit a single request with backpressure control.
+     * 
+     * <p>For request-based completion, atomically claims a request slot BEFORE any
+     * blocking operations (semaphore acquire, rate limiting). This eliminates the
+     * race condition where multiple threads pass the loop check simultaneously and
+     * over-submit past the target count.</p>
+     *
+     * @param targetRequests the target request count for request-based completion,
+     *                       or {@code <= 0} for duration-based (unlimited)
+     * @return {@code true} if a request was submitted, {@code false} if the target
+     *         was already reached (request-based only)
+     */
+    private boolean submitRequestWithBackpressure(List<ClientSlot> clientSlots, CommandSelector selector,
                                                 KeyGenerator keyGenerator, RateLimiter rateLimiter,
                                                 MetricsCollector metrics, AtomicLong requestCount,
-                                                AtomicLong pendingCount, Semaphore globalSlots) 
+                                                AtomicLong pendingCount, Semaphore globalSlots,
+                                                long targetRequests) 
             throws InterruptedException {
+        
+        // 0. For request-based completion: atomically claim a slot BEFORE blocking.
+        //    This prevents over-submission when multiple threads race past the loop check.
+        if (targetRequests > 0) {
+            long claimed = requestCount.getAndIncrement();
+            if (claimed >= targetRequests) {
+                requestCount.decrementAndGet(); // Unclaim
+                return false; // Target reached
+            }
+        }
         
         // 1. Apply rate limiting (if configured)
         if (rateLimiter != null) {
@@ -282,9 +498,11 @@ public class BenchmarkEngine {
         // 5. Select command
         Command command = selector.select();
         
-        // 6. Track pending
+        // 6. Track pending (and increment for duration-based only)
         pendingCount.incrementAndGet();
-        requestCount.incrementAndGet();
+        if (targetRequests <= 0) {
+            requestCount.incrementAndGet(); // Duration-based: increment here
+        }
         
         // 7. Execute async
         command.execute(slot.client, keyGenerator)
@@ -301,6 +519,7 @@ public class BenchmarkEngine {
                     globalSlots.release();
                     return null;
                 });
+        return true;
     }
     
     /**

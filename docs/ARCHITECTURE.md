@@ -206,6 +206,52 @@ Different languages use appropriate concurrency primitives:
 
 The key requirement is that N connections can operate concurrently, each potentially with pipeline_depth in-flight requests.
 
+## Parallel Command Issuers (Java)
+
+At high connection counts (128+), a single command-issuing thread becomes a CPU bottleneck — saturating one core on semaphore contention, key generation (`String.format()`), and round-robin scanning. To address this, the Java engine supports **parallel command issuer threads** that partition client connections across multiple threads.
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    Shared (thread-safe)                        │
+│  AtomicLong requestCount, pendingCount                        │
+│  MetricsCollector (SynchronizedHistogram + ConcurrentHashMap) │
+│  RateLimiter (Semaphore-based)                                │
+└────────────────────────────────────────────────────────────────┘
+        │                    │                    │
+   ┌────▼─────┐       ┌─────▼────┐        ┌─────▼────┐
+   │ issuer-0 │       │ issuer-1 │        │ issuer-N │
+   │──────────│       │──────────│        │──────────│
+   │ Slots    │       │ Slots    │        │ Slots    │
+   │  0..63   │       │ 64..127  │        │ 192..255 │
+   │ Semaphore│       │ Semaphore│        │ Semaphore│
+   │ KeyGen   │       │ KeyGen   │        │ KeyGen   │
+   │ CmdSel   │       │ CmdSel   │        │ CmdSel   │
+   └──────────┘       └──────────┘        └──────────┘
+```
+
+### Thread-local state (no contention)
+- **Partition of ClientSlots** — each thread manages only its subset
+- **Semaphore** — permits = sum of pipeline depths in its partition
+- **KeyGenerator** — forked with unique seed per thread (shared AtomicLong counter for sequential mode)
+- **CommandSelector** — independent `Random` instance
+
+### Auto-detection
+By default, the number of issuer threads is auto-computed:
+```
+threads = max(1, min(connections / 32, availableProcessors))
+```
+This can be overridden with the `--command-issuer-threads` CLI flag.
+
+| Connections | Default Threads |
+|-------------|----------------|
+| 1–31        | 1              |
+| 32–63       | 1              |
+| 64–95       | 2              |
+| 128–159     | 4              |
+| 256+        | 8              |
+
 ## Warmup Strategy
 
 All engines implement the same warmup strategy:
