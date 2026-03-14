@@ -21,9 +21,7 @@ jobs:
           - configs/drivers/default/spring-data-valkey-lettuce.json
           - configs/drivers/default/valkey-glide.json
         workload:
-          - configs/workloads/reference/basic-standalone-single-client.json
-          - configs/workloads/reference/basic-standalone-10-clients.json
-          - configs/workloads/reference/basic-standalone-100-clients.json
+          - configs/workloads/reference/basic-standalone-single-client-1M-reqs.json
 
     steps:
       - uses: actions/checkout@v4
@@ -96,9 +94,7 @@ jobs:
           - configs/drivers/default/redis-rb.json
           - configs/drivers/default/valkey-glide-ruby.json
         workload:
-          - configs/workloads/reference/basic-standalone-single-client.json
-          - configs/workloads/reference/basic-standalone-10-clients.json
-          - configs/workloads/reference/basic-standalone-100-clients.json
+          - configs/workloads/reference/basic-standalone-single-client-1M-reqs.json
 
     steps:
       - uses: actions/checkout@v4
@@ -187,11 +183,11 @@ jobs:
           echo "Downloaded results:"
           find results -name "*.ndjson" -type f
 
-      # Java graphs — per concurrency level
+      # TODO - rework with matrix orchistrator
       - name: Generate Java graphs - 1 Client
         run: |
           python scripts/generate_graphs.py \
-            --results "results/github-runner/reference/*-basic-standalone-single-client.ndjson" \
+            --results "results/github-runner/reference/*-basic-standalone-single-client-1M-reqs.ndjson" \
             --output graphs/java/1-client/ \
             --phase STEADY \
             --language java \
@@ -222,7 +218,7 @@ jobs:
       - name: Generate Ruby graphs - 1 Client
         run: |
           python scripts/generate_graphs.py \
-            --results "results/github-runner/reference/*-basic-standalone-single-client.ndjson" \
+            --results "results/github-runner/reference/*-basic-standalone-single-client-1M-reqs.ndjson" \
             --output graphs/ruby/1-client/ \
             --phase STEADY \
             --language ruby \

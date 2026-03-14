@@ -12,39 +12,62 @@ This document describes the architecture of resp-bench and the design decisions 
 ## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Configuration                            │
-│      ┌──────────────────┐             ┌──────────────────┐      │
-│      │  Driver Config   │             │ Workload Config  │      │
-│      │  (driver.json)   │             │ (workload.json)  │      │
-│      └────────┬─────────┘             └────────┬─────────┘      │
-│               │                                │                │
-│               └──────────────┬─────────────────┘                │
-│                              ▼                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │              Language-specific Benchmark Engine             ││
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────────┐││
-│  │  │Key Generator│ │Rate Limiter │ │  Metrics Collector      │││
-│  │  └─────────────┘ └─────────────┘ └─────────────────────────┘││
-│  │         │               │                    │              ││
-│  │         └───────────────┼────────────────────┘              ││
-│  │                         ▼                                   ││
-│  │  ┌─────────────────────────────────────────────────────────┐││
-│  │  │         Language-specific Client Driver Abstraction     │││
-│  │  │  ┌──────┐ ┌────────┐ ┌───────┐ ┌────────┐ ┌──────────┐  │││
-│  │  │  │Jedis │ │Lettuce │ │ GLIDE │ │redis-py│ │  go-redis│  │││
-│  │  │  └──────┘ └────────┘ └───────┘ └────────┘ └──────────┘  │││
-│  │  └─────────────────────────────────────────────────────────┘││
+┌──────────────────────────────────────────────────────────────────┐
+│                  Orchestration Layer (Python)                     │
+│                                                                  │
+│  ┌────────────────────┐         ┌──────────────────────────────┐│
+│  │ Matrix Config JSON  │         │  System Monitor (thread)     ││
+│  │ dimensions, x_axis, │         │  CPU% ← /proc/stat          ││
+│  │ bindings, applies_to│         │  RSS  ← /proc/<pid>/status  ││
+│  └─────────┬──────────┘         └──────────────┬───────────────┘│
+│            │                                    │                │
+│            ▼ for each variant × x_value × iter  │ concurrent     │
+│  ┌──────────────────────────────────────────────┴──────────────┐│
+│  │   ┌──────────────────┐          ┌──────────────────┐        ││
+│  │   │  Driver Config   │          │ Workload Config  │        ││
+│  │   │  (generated)     │          │ (generated)      │        ││
+│  │   └────────┬─────────┘          └────────┬─────────┘        ││
+│  │            └──────────────┬──────────────┘                  ││
+│  │                           ▼                                 ││
+│  │  ┌─────────────────────────────────────────────────────┐   ││
+│  │  │       Language Engine (Java/Ruby subprocess)         │   ││
+│  │  │  ┌─────────────┐ ┌─────────────┐ ┌──────────────┐  │   ││
+│  │  │  │Key Generator│ │Rate Limiter │ │Metrics (HDR)  │  │   ││
+│  │  │  └─────────────┘ └─────────────┘ └──────────────┘  │   ││
+│  │  │  ┌─────────────────────────────────────────────────┐│   ││
+│  │  │  │     Client Driver Abstraction                   ││   ││
+│  │  │  │ ┌──────┐ ┌────────┐ ┌───────┐ ┌──────────────┐ ││   ││
+│  │  │  │ │Jedis │ │Lettuce │ │ GLIDE │ │Spring Data...│ ││   ││
+│  │  │  │ └──────┘ └────────┘ └───────┘ └──────────────┘ ││   ││
+│  │  │  └─────────────────────────────────────────────────┘│   ││
+│  │  └─────────────────────────────────────────────────────┘   ││
 │  └─────────────────────────────────────────────────────────────┘│
-│                           │                                     │
-│                           ▼                                     │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                 Metrics Output (NDJSON)                     ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+│            │                                    │                │
+│            ▼                                    ▼                │
+│  ┌──────────────────┐          ┌──────────────────────────────┐ │
+│  │ <label>.ndjson    │          │ <label>.system.ndjson        │ │
+│  │ + _manifest.json  │          │ (CPU%, RSS, mem_available)   │ │
+│  └─────────┬────────┘          └──────────────┬───────────────┘ │
+│            └─────────────┬────────────────────┘                  │
+│                          ▼                                       │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │     Interactive Graph Generator (Plotly.js HTML)          │   │
+│  │  RPS scalability, latency percentiles, CPU, delta charts  │   │
+│  │  Outlier filtering: 4-method consensus detection          │   │
+│  │  Auto-shade colors, manifest-based legends                │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Core Components
+
+### 0. Orchestration Layer
+
+**Matrix Runner** (`run_benchmark_matrix.py`): Takes a matrix config JSON defining dimensions (connections, drivers, env vars, pool sizes) and computes the Cartesian product of non-x-axis dimensions to produce one series per unique config combo. Supports dimension bindings (`"$connections"`), conditional dimensions (`applies_to` with glob matching), and writes `_manifest.json` metadata. See [BENCHMARK_MATRIX.md](BENCHMARK_MATRIX.md).
+
+**System Monitor** (`system_monitor.py`): Thread-based daemon that samples `/proc/stat` (CPU%), `/proc/<pid>/status` (RSS per process group), and `/proc/meminfo` (system memory) at configurable intervals. Runs in-process alongside the matrix runner — no subprocess overhead. Writes `.system.ndjson`.
+
+**Interactive Graph Generator** (`generate_interactive_graphs.py`): Produces self-contained HTML with Plotly.js charts. Auto-detects flat (matrix) vs legacy (subdirectory-per-client-count) layouts. Reads `_manifest.json` for rich legend labels. Auto-shades colors when multiple variants of the same driver exist. See [INTERACTIVE_GRAPHS.md](INTERACTIVE_GRAPHS.md).
 
 ### 1. Configuration Layer
 

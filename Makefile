@@ -358,6 +358,46 @@ config-editor-dev:
 	cd config-editor && npm install && npm run dev
 
 # ============================================================================
+# Benchmark Matrix
+# ============================================================================
+
+MATRIX?=configs/matrices/driver-comparison-high-tps.json
+GRAPHS_DIR?=graphs/interactive/
+
+benchmark-matrix: java-build
+	python scripts/run_benchmark_matrix.py \
+		--matrix $(MATRIX) \
+		--output-dir $(OUTPUT_DIR) \
+		--server-host $(SERVER_HOST)
+
+benchmark-matrix-dry-run:
+	python scripts/run_benchmark_matrix.py \
+		--matrix $(MATRIX) \
+		--output-dir /tmp/resp-bench-dry-run \
+		--dry-run
+
+benchmark-matrix-graphs:
+	python scripts/generate_interactive_graphs.py \
+		$(OUTPUT_DIR) \
+		--output $(GRAPHS_DIR)
+
+# ============================================================================
+# Script Tests (Python)
+# ============================================================================
+
+test-scripts:
+	cd scripts && python -m pytest tests/ -v -k "not integration"
+
+test-scripts-unit:
+	cd scripts && python -m pytest tests/ -v -k "not integration"
+
+test-scripts-e2e: java-build
+	cd scripts && python -m pytest tests/test_e2e_pipeline.py -v
+
+test-scripts-all: java-build
+	cd scripts && python -m pytest tests/ -v
+
+# ============================================================================
 # All Languages
 # ============================================================================
 

@@ -1,0 +1,72 @@
+{
+    "description": "Compare all drivers tuned for maximum throughput across client counts",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 10,
+    "dimensions": {
+        "connections": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide.json",
+            "configs/drivers/high-throughput/jedis.json",
+            "configs/drivers/high-throughput/lettuce.json",
+            "configs/drivers/high-throughput/redisson.json",
+            "configs/drivers/high-throughput/spring-data-valkey-glide.json",
+            "configs/drivers/high-throughput/spring-data-valkey-jedis.json",
+            "configs/drivers/high-throughput/spring-data-valkey-lettuce.json",
+            "configs/drivers/high-throughput/spring-data-redis-jedis.json",
+            "configs/drivers/high-throughput/spring-data-redis-lettuce.json"
+        ],
+        "pool_size": {
+            "values": [
+                "$connections"
+            ],
+            "applies_to": {
+                "driver_config": [
+                    "*spring-data*"
+                ]
+            }
+        },
+        "use_pooling": {
+            "values": [
+                true
+            ],
+            "applies_to": {
+                "driver_config": [
+                    "*spring-data*"
+                ]
+            }
+        },
+        "share_native_connection": {
+            "values": [
+                false
+            ],
+            "applies_to": {
+                "driver_config": [
+                    "*spring-data*lettuce*"
+                ]
+            }
+        },
+        "env": {
+            "values": [
+                {
+                    "GLIDE_TOKIO_WORKER_THREADS": "16",
+                    "GLIDE_CALLBACK_WORKER_THREADS": "16"
+                }
+            ],
+            "applies_to": {
+                "driver_config": [
+                    "*glide*"
+                ]
+            }
+        }
+    }
+}

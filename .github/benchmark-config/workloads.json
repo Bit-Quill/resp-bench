@@ -1,5 +1,3 @@
 [
-    "configs/workloads/reference/basic-standalone-single-client.json",
-    "configs/workloads/reference/basic-standalone-10-clients.json",
-    "configs/workloads/reference/basic-standalone-100-clients.json"
+    "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json"
 ]

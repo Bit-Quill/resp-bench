@@ -79,6 +79,9 @@ public class RecordingBenchmarkClient implements BenchmarkClient {
     private volatile double errorRate = 0.0;
     private volatile String errorMessage = "Simulated error";
     
+    // Memory ballast for testing — holds allocated bytes to prevent GC
+    private volatile byte[] memoryBallast = null;
+    
     // Executor for async delay simulation (CPU count threads for scheduling)
     private final ScheduledExecutorService delayExecutor = 
             Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());

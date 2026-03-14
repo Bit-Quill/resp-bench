@@ -1,0 +1,44 @@
+{
+    "description": "Valkey-Glide JNI thread configuration sweep comparing different tokio worker and callback thread counts. Requires a lot of cores (m5.metal) to run efficiently",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-10-secs.json",
+    "iterations": 10,
+    "dimensions": {
+        "connections": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            256
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide.json"
+        ],
+        "env": [
+            {
+                "GLIDE_TOKIO_WORKER_THREADS": "1",
+                "GLIDE_CALLBACK_WORKER_THREADS": "2"
+            },
+            {
+                "GLIDE_TOKIO_WORKER_THREADS": "2",
+                "GLIDE_CALLBACK_WORKER_THREADS": "4"
+            },
+            {
+                "GLIDE_TOKIO_WORKER_THREADS": "4",
+                "GLIDE_CALLBACK_WORKER_THREADS": "8"
+            },
+            {
+                "GLIDE_TOKIO_WORKER_THREADS": "8",
+                "GLIDE_CALLBACK_WORKER_THREADS": "16"
+            },
+            {
+                "GLIDE_TOKIO_WORKER_THREADS": "16",
+                "GLIDE_CALLBACK_WORKER_THREADS": "32"
+            }
+        ]
+    }
+}

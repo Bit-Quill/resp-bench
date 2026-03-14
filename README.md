@@ -1,358 +1,205 @@
 # resp-bench
 
-A multi-language benchmark suite for RESP protocol (Redis/Valkey) compatible databases and client libraries.
+A multi-language benchmark suite for RESP protocol (Redis/Valkey) compatible databases and client libraries, with a matrix-based orchestration layer for multi-dimensional parameter sweeps and interactive graph generation.
 
-## Performance Comparison
-
-The graphs below show throughput (RPS) comparisons across client libraries, separated by language. Results are automatically updated via CI on GitHub Actions runners.
-
-### Java Clients
-
-#### Single Client (1 connection)
-
-![SET RPS - Java 1 Client](graphs/java/1-client/rps-SET.png)
-![GET RPS - Java 1 Client](graphs/java/1-client/rps-GET.png)
-
-#### 10 Concurrent Clients
-
-![SET RPS - Java 10 Clients](graphs/java/10-clients/rps-SET.png)
-![GET RPS - Java 10 Clients](graphs/java/10-clients/rps-GET.png)
-
-#### 100 Concurrent Clients
-
-![SET RPS - Java 100 Clients](graphs/java/100-clients/rps-SET.png)
-![GET RPS - Java 100 Clients](graphs/java/100-clients/rps-GET.png)
-
-> 📊 [Full Java latency breakdown (p50, p95, p99, p999)](docs/BENCHMARKS_JAVA.md)
-
-### Ruby Clients
-
-#### Single Client (1 connection)
-
-![SET RPS - Ruby 1 Client](graphs/ruby/1-client/rps-SET.png)
-![GET RPS - Ruby 1 Client](graphs/ruby/1-client/rps-GET.png)
-
-#### 10 Concurrent Clients
-
-![SET RPS - Ruby 10 Clients](graphs/ruby/10-clients/rps-SET.png)
-![GET RPS - Ruby 10 Clients](graphs/ruby/10-clients/rps-GET.png)
-
-#### 100 Concurrent Clients
-
-![SET RPS - Ruby 100 Clients](graphs/ruby/100-clients/rps-SET.png)
-![GET RPS - Ruby 100 Clients](graphs/ruby/100-clients/rps-GET.png)
-
-> 📊 [Full Ruby latency breakdown (p50, p95, p99, p999)](docs/BENCHMARKS_RUBY.md)
-
-> **Note**: These benchmarks run on shared GitHub Actions runners. Results may have variance between runs due to noisy neighbor effects. The graphs show averages across multiple runs (n=count shown in labels).
-
-## Overview
-
-**resp-bench** provides unified benchmark functionality across multiple programming languages, enabling fair comparisons between different client libraries and implementations. All language engines share the same:
-
-- **Configuration format** - JSON-based driver and workload configurations
-- **Traffic generation algorithms** - Consistent key generation, rate limiting, and workload patterns
-- **Metrics output** - NDJSON with HdrHistogram for cross-language analysis
-
-## Supported Languages
-
-| Language | Status | Supported Drivers |
-|----------|--------|-------------------|
-| Java | ✅ Ready | Jedis, Lettuce, Valkey-Glide, Redisson, Spring Data Valkey/Redis |
-| Ruby | ✅ Ready | redis-rb, valkey-glide-ruby |
-| Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
-| Go | 📋 Future | go-redis, rueidis |
-| Node.js | 📋 Future | ioredis, node-redis |
+> 📐 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture diagram and component details.
 
 ## Quick Start
 
 ### Prerequisites
 
-- Make (for server management)
-- Language-specific build tools (Maven for Java, pip for Python, etc.)
+- Python 3.8+, Java 21+, Maven
+- Make
 
-### 1. Start a Server
+### 1. Run a Benchmark Matrix
 
 ```bash
-# Start standalone Valkey/Redis server on port 6379
-make server-standalone-start
+# See what would run (dry run)
+python scripts/run_benchmark_matrix.py \
+    --matrix configs/matrices/driver-comparison-high-tps.json \
+    --output-dir results/my-run \
+    --dry-run
 
-# Or start a cluster (ports 7379-7382)
-make server-cluster-init
+# Run for real (needs a Valkey/Redis server)
+make server-standalone-start
+python scripts/run_benchmark_matrix.py \
+    --matrix configs/matrices/driver-comparison-high-tps.json \
+    --output-dir results/my-run \
+    --server-host localhost
 ```
 
-### 2. Run a Benchmark
+### 2. Generate Interactive Graphs
 
-**Java:**
+```bash
+python scripts/generate_interactive_graphs.py \
+    results/my-run/ \
+    --output graphs/interactive/my-run/ \
+    --title "My Benchmark Run"
+# Open graphs/interactive/my-run/scalability_and_delta.html in a browser
+```
+
+### 3. Run a Single Engine Directly
+
 ```bash
 make java-run \
-  DRIVER=configs/drivers/example-jedis-standalone.json \
-  WORKLOAD=configs/workloads/example-workload.json
+  DRIVER=configs/drivers/default/jedis.json \
+  WORKLOAD=configs/workloads/example-workload.json \
+  SERVER=localhost:6379
 ```
 
-**Ruby:**
-```bash
-make ruby-run \
-  DRIVER=configs/drivers/example-redis-rb-standalone.json \
-  WORKLOAD=configs/workloads/example-workload.json
+## Matrix Orchestrator
+
+The matrix orchestrator (`run_benchmark_matrix.py`) sweeps a **Cartesian product of configurable dimensions** — different drivers, thread configurations, pool sizes, environment variables — producing results for interactive visualization.
+
+```json
+{
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "dimensions": {
+        "connections": [1, 4, 16, 64, 128],
+        "driver_config": ["configs/drivers/high-throughput/spring-data-valkey-glide.json"],
+        "pool_size": "$connections",
+        "env": [
+            {"GLIDE_TOKIO_WORKER_THREADS": "1", "GLIDE_CALLBACK_WORKER_THREADS": "2"},
+            {"GLIDE_TOKIO_WORKER_THREADS": "2", "GLIDE_CALLBACK_WORKER_THREADS": "4"},
+            {"GLIDE_TOKIO_WORKER_THREADS": "8", "GLIDE_CALLBACK_WORKER_THREADS": "16"}
+        ]
+    }
+}
 ```
 
-**Python (when available):**
-```bash
-make python-run \
-  DRIVER=configs/drivers/example-redis-py-standalone.json \
-  WORKLOAD=configs/workloads/example-workload.json
-```
+Features: dimension bindings (`$connections`), conditional dimensions (`applies_to`), environment variable injection, `_manifest.json` metadata output.
 
-### 3. Stop Servers
+📖 [Full matrix orchestrator documentation](docs/BENCHMARK_MATRIX.md)
 
-```bash
-make server-stop
-```
+## Interactive Graph Generator
+
+Produces self-contained HTML files with Plotly.js charts: RPS scalability, latency percentiles (p50/p95/p99/p999), CPU usage, efficiency, and delta comparison charts. Supports both legacy (subdirectory-per-client-count) and flat (matrix output) layouts.
+
+📖 [Full graph generator documentation](docs/INTERACTIVE_GRAPHS.md)
+
+## System Monitor
+
+Thread-based system metrics collector that runs alongside benchmarks, collecting CPU% (system-wide via `/proc/stat`), memory RSS (per process group via `/proc/<pid>/status`), and system memory availability. Outputs `.system.ndjson` with each sample.
+
+## Supported Languages
+
+| Language | Status | Drivers |
+|----------|--------|---------|
+| Java | ✅ Ready | Jedis, Lettuce, Valkey-Glide, Redisson, Spring Data Valkey/Redis |
+| Ruby | ✅ Ready | redis-rb, valkey-glide-ruby |
+| Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 
 ## Project Structure
 
 ```
 resp-bench/
-├── README.md                    # This file
-├── LICENSE                      # Apache 2.0
-├── Makefile                     # Server management + language targets
-├── configs/                     # Shared configuration files
+├── Makefile                     # Server management + all targets
+├── configs/
+│   ├── drivers/                 # Driver configurations (default/, high-throughput/)
+│   ├── workloads/               # Workload definitions (reference/)
+│   ├── matrices/                # Matrix orchestrator configs
 │   ├── schemas/                 # JSON schemas for validation
-│   ├── drivers/                 # Driver configurations
-│   └── workloads/               # Workload definitions
-├── config-editor/               # React-based configuration editor UI
+│   └── test/                    # E2E test configs
+│       ├── drivers/             # Recording client configs
+│       ├── matrices/            # Test matrix configs
+│       └── workloads/           # Short test workloads
+├── scripts/
+│   ├── run_benchmark_matrix.py  # Matrix orchestrator
+│   ├── generate_interactive_graphs.py  # Interactive graph generator
+│   ├── system_monitor.py        # Thread-based CPU/memory monitor
+│   └── tests/                   # Python test suite (108 tests)
+│       ├── test_outlier_detection.py
+│       ├── test_matrix_config.py
+│       ├── test_graph_data_loading.py
+│       ├── test_graph_html_output.py
+│       ├── test_system_monitor.py
+│       └── test_e2e_pipeline.py  # E2E: engine → NDJSON → graphs
 ├── java/                        # Java benchmark engine
 ├── ruby/                        # Ruby benchmark engine
-├── python/                      # Python benchmark engine (planned)
-├── docs/                        # Documentation
+├── docs/
 │   ├── ARCHITECTURE.md          # System architecture
-│   ├── ADDING_LANGUAGE.md       # Guide for adding new languages
+│   ├── BENCHMARK_MATRIX.md      # Matrix orchestrator docs
+│   ├── INTERACTIVE_GRAPHS.md    # Graph generator docs
 │   ├── CONFIG_SPECIFICATION.md  # Configuration format spec
-│   ├── BENCHMARKS_JAVA.md       # Full Java benchmark details (all percentiles)
-│   └── BENCHMARKS_RUBY.md       # Full Ruby benchmark details (all percentiles)
-├── graphs/                      # Auto-generated benchmark graphs
-│   ├── java/                    # Java client graphs
-│   │   ├── 1-client/            # Single client results
-│   │   ├── 10-clients/          # 10 concurrent clients
-│   │   └── 100-clients/         # 100 concurrent clients
-│   └── ruby/                    # Ruby client graphs
-│       ├── 1-client/
-│       ├── 10-clients/
-│       └── 100-clients/
-└── output/                      # Default metrics output directory
+│   ├── BENCHMARKS_JAVA.md       # Java benchmark details
+│   └── BENCHMARKS_RUBY.md       # Ruby benchmark details
+└── graphs/interactive/          # Generated HTML graphs
 ```
 
 ## Configuration
 
 ### Driver Configuration
 
-Defines which client library to use:
-
 ```json
 {
-  "schema_version": "1.0",
-  "description": "Jedis client - standalone mode",
-  "driver_id": "jedis",
+  "driver_id": "spring-data-valkey",
   "mode": "standalone",
-  "specific_driver_config": {}
+  "specific_driver_config": {
+    "secondary_driver_id": "valkey-glide",
+    "pool_size": 32
+  }
 }
 ```
 
 ### Workload Configuration
 
-Defines the benchmark phases and traffic patterns:
-
 ```json
 {
-  "schema_version": "1.0",
-  "benchmark_profile": {
-    "name": "Example Benchmark",
-    "description": "Two-phase benchmark"
-  },
-  "phases": [
-    {
-      "id": "WARMUP",
-      "connections": 10,
-      "completion": {"type": "requests", "requests": 1000},
-      "keyspace": {
-        "keys_count": 1000,
-        "key_prefix": "bench:",
-        "generation_alg": "sequential_int"
-      },
-      "commands": [
-        {"command": "set", "weight": 1.0, "data_size_bytes": 256}
-      ]
-    }
-  ]
+  "phases": [{
+    "id": "STEADY",
+    "connections": 64,
+    "commands": [
+      {"command": "set", "weight": 0.5, "data_size_bytes": 512},
+      {"command": "get", "weight": 0.5}
+    ],
+    "completion": {"type": "requests", "requests": 1000000}
+  }]
 }
 ```
 
 See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full details.
 
-## Config Editor
-
-A visual tool for creating and editing benchmark configurations without writing JSON manually.
-
-### Starting the Editor
-
-```bash
-# Development mode (with hot reload)
-make config-editor-dev
-
-# Then open http://localhost:5173 in your browser
-```
-
-### Features
-
-- **Driver Configuration**: Select client library, connection mode, and driver-specific settings
-- **Workload Configuration**: Define benchmark phases, commands, keyspace settings, and completion criteria
-- **Import/Export**: Load existing configs or save new ones as JSON files
-- **Live Preview**: See the generated JSON in real-time as you make changes
-
-## Metrics Output
-
-All engines output metrics in NDJSON format (one JSON object per line):
-
-```json
-{
-  "metadata": {
-    "commit_id": "abc123d-dirty",
-    "timestamp": "2026-02-15T12:00:00Z",
-    "driver_id": "jedis",
-    "primary_driver_version": "5.2.0",
-    "secondary_driver_id": null,
-    "secondary_driver_version": null
-  },
-  "phase": {
-    "id": "STEADY",
-    "status": "COMPLETED",
-    "duration_ms": 60000
-  },
-  "totals": {
-    "requests": 1000000,
-    "errors": 0
-  },
-  "metrics": {
-    "GET": {
-      "requests": 800000,
-      "latency": {
-        "unit": "us",
-        "summary": {"p50": 120, "p99": 310, "max": 9000},
-        "hdr": {"payload_b64": "H4sIAAAAA..."}
-      }
-    }
-  }
-}
-```
-
-## Graph Generation
-
-Generate performance comparison graphs from benchmark results:
-
-```bash
-# Install Python dependencies
-pip install matplotlib numpy
-
-# Generate graphs for Java clients only
-python scripts/generate_graphs.py \
-  --results results/github-runner/reference/*.ndjson \
-  --output graphs/java/1-client/ \
-  --phase STEADY \
-  --language java \
-  --workload "Java - 1 Client"
-
-# Generate graphs for Ruby clients only
-python scripts/generate_graphs.py \
-  --results results/github-runner/reference/*.ndjson \
-  --output graphs/ruby/100-clients/ \
-  --phase STEADY \
-  --language ruby \
-  --workload "Ruby - 100 Clients"
-
-# Generate graphs for a specific commit (all languages)
-python scripts/generate_graphs.py \
-  --results results/github-runner/reference/*.ndjson \
-  --output graphs/ \
-  --phase STEADY \
-  --commit-id abc123def456
-```
-
-### Aggregation Policy
-
-The script aggregates results using a 3-tuple key: `(commit_id, primary_driver_version, secondary_driver_version)`. This ensures only results from the same CI run are compared together.
-
-- **Auto-detection (default)**: When no explicit filter is provided, the script finds the latest record by timestamp and uses its metadata values as the filter
-- **Explicit filter**: Use `--commit-id`, `--primary-driver-version`, or `--secondary-driver-version` to filter specific runs
-
 ## Make Targets
+
+### Benchmark Matrix
+
+| Target | Description |
+|--------|-------------|
+| `make benchmark-matrix` | Run matrix benchmark (MATRIX, OUTPUT_DIR, SERVER_HOST) |
+| `make benchmark-matrix-dry-run` | Show plan without running |
+| `make benchmark-matrix-graphs` | Generate graphs from results |
+
+### Testing
+
+| Target | Description |
+|--------|-------------|
+| `make test-scripts` | Run 99 Python unit tests (~12s) |
+| `make test-scripts-e2e` | Run 9 e2e integration tests (~7min, builds Java) |
+| `make test-scripts-all` | Run all 108 tests |
+| `make java-test` | Run Java unit tests |
+| `make ruby-test` | Run Ruby tests |
+
+### Engines
+
+| Target | Description |
+|--------|-------------|
+| `make java-run` | Run Java engine (DRIVER, WORKLOAD, SERVER) |
+| `make ruby-run` | Run Ruby engine (DRIVER, WORKLOAD, SERVER) |
+| `make java-build` | Build Java JAR |
 
 ### Server Management
 
 | Target | Description |
 |--------|-------------|
-| `make server-start` | Start all servers (standalone + cluster + sentinel) |
-| `make server-stop` | Stop all servers |
 | `make server-standalone-start` | Start standalone server (port 6379) |
 | `make server-cluster-init` | Initialize cluster (ports 7379-7382) |
-
-### Java Engine
-
-| Target | Description |
-|--------|-------------|
-| `make java-build` | Build Java benchmark JAR |
-| `make java-test` | Run unit tests |
-| `make java-run` | Run benchmark (uses DRIVER, WORKLOAD, SERVER vars) |
-| `make java-info` | Show supported drivers and commands |
-
-### Ruby Engine
-
-| Target | Description |
-|--------|-------------|
-| `make ruby-build` | Install Ruby dependencies (bundle install) |
-| `make ruby-test` | Run unit and integration tests |
-| `make ruby-run` | Run benchmark (uses DRIVER, WORKLOAD, SERVER vars) |
-| `make ruby-info` | Show supported drivers and commands |
-
-### Config Editor
-
-| Target | Description |
-|--------|-------------|
-| `make config-editor-dev` | Run config editor in development mode |
-| `make config-editor-build` | Build config editor for production |
-
-## Comparing Client Libraries
-
-Example: Compare Jedis vs Lettuce on the same workload:
-
-```bash
-# Start server
-make server-standalone-start
-
-# Run with Jedis
-make java-run \
-  DRIVER=configs/drivers/example-jedis-standalone.json \
-  WORKLOAD=configs/workloads/example-workload.json \
-  METRICS_OUTPUT=output/jedis.ndjson
-
-# Run with Lettuce
-make java-run \
-  DRIVER=configs/drivers/example-lettuce-standalone.json \
-  WORKLOAD=configs/workloads/example-workload.json \
-  METRICS_OUTPUT=output/lettuce.ndjson
-
-# Stop server
-make server-stop
-
-# Compare results
-cat output/jedis.ndjson output/lettuce.ndjson | jq '.phase.id, .metrics.GET.latency.summary'
-```
+| `make server-stop` | Stop all servers |
 
 ## Contributing
 
-We welcome contributions! See:
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Understand the system design
-- [docs/ADDING_LANGUAGE.md](docs/ADDING_LANGUAGE.md) - Add support for a new language
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture
+- [docs/ADDING_LANGUAGE.md](docs/ADDING_LANGUAGE.md) — Add support for a new language
 
 ## Author
 
@@ -360,4 +207,4 @@ Authored by Ilia Kolominsky
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE)
+Apache License 2.0 — see [LICENSE](LICENSE)

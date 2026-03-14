@@ -1,0 +1,19 @@
+{
+    "benchmark_profile": {"name": "E2E-Short"},
+    "phases": [{
+        "id": "STEADY",
+        "description": "Short steady phase for e2e testing",
+        "connections": 2,
+        "commands": [
+            {"command": "set", "weight": 0.5, "data_size_bytes": 32},
+            {"command": "get", "weight": 0.5}
+        ],
+        "keyspace": {
+            "key_prefix": "e2e:",
+            "keys_count": 100,
+            "key_size_bytes": 16,
+            "generation_alg": "sequential_int"
+        },
+        "completion": {"type": "requests", "requests": 200}
+    }]
+}

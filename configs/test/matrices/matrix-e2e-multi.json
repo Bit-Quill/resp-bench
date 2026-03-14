@@ -1,0 +1,13 @@
+{
+    "description": "E2E test: fast vs slow recording client",
+    "x_axis": "connections",
+    "iterations": 1,
+    "workload_template": "configs/test/workloads/workload-short.json",
+    "dimensions": {
+        "connections": [2],
+        "driver_config": [
+            "configs/test/drivers/recording-fast.json",
+            "configs/test/drivers/recording-slow.json"
+        ]
+    }
+}

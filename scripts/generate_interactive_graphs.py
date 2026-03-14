@@ -2,19 +2,43 @@
 """
 Interactive Graph Generator for resp-bench benchmark results.
 
+Supports two directory layouts (auto-detected):
+
+  **Legacy layout** — subdirectories per client count:
+    results/<N>-clients/<driver>.ndjson
+
+  **Flat layout** — one NDJSON per series, all client counts inside:
+    results/<label>.ndjson
+    results/_manifest.json  (optional, for rich legends)
+
 Generates a self-contained interactive HTML file with Plotly.js charts:
-  1. RPS Scalability — total RPS vs client count per driver
-  2. RPS Delta — spring-data-valkey-glide % advantage vs each driver
-  3. CPU Scalability — avg CPU% during STEADY phase vs client count (if .cpu.ndjson exists)
-  4. RPS/CPU% Efficiency — throughput per unit CPU% vs client count (if .cpu.ndjson exists)
-  5. CPU Efficiency Delta — spring-data-valkey-glide % advantage in RPS/CPU% vs each driver
+  1. RPS Scalability — total RPS vs client count per driver/variant
+  2. RPS Delta — reference driver % advantage vs each other series
+  3. Latency per Percentile — per-command (GET, SET, etc.) latency charts
+     for p50, p95, p99, p99.9 with X=client count, Y=latency (µs)
+  4. CPU Scalability — avg CPU% during STEADY phase vs client count (if .system.ndjson exists)
+  5. RPS/CPU% Efficiency — throughput per unit CPU% vs client count (if .system.ndjson exists)
+  6. CPU Efficiency Delta — reference driver % advantage in RPS/CPU% vs each driver
+
+Driver version information is extracted from NDJSON metadata and displayed
+in chart legends. For low-level drivers: "jedis (5.2.0)". For spring-data
+wrappers with a secondary driver: "spring-data-valkey-glide (0.2.0 / valkey-glide 2.2.3)".
+
+When a _manifest.json is present (produced by run_benchmark_matrix.py),
+variant labels are enriched with config parameters (pool_size, env vars, etc.)
+and colors are auto-shaded per driver family so that e.g. all SDV-glide variants
+get different shades of teal.
 
 Uses total workload RPS (totals.requests / phase.duration) rather than
 per-command RPS, because all commands share the same phase timer and
 per-command counts divided by total duration just reflects command weights,
 not actual per-command throughput.
 
-CPU data is loaded from .cpu.ndjson files (produced by cpu_monitor.py).
+Latency data is extracted from per-command percentile summaries in the NDJSON
+(metrics.<CMD>.latency.summary.{p50, p95, p99, p999}), averaged across
+non-outlier runs for each driver and client count.
+
+CPU data is loaded from .system.ndjson files (produced by system_monitor.py).
 Each CPU sample has a timestamp_epoch; only samples falling within the
 STEADY phase window (start_timestamp..finish_timestamp) are used.
 
@@ -24,21 +48,32 @@ Outlier filtering uses 4-method consensus detection (same as validate_stability.
   - Percentage Deviation from Median (threshold=15%)
   - Grubbs' Test (alpha=0.05)
 A run is discarded when flagged by ≥2 methods.
+Latency and CPU data use the same outlier indices as RPS for consistency.
 
 Color families:
   - spring-data-valkey-*: greens/teals
   - spring-data-redis-*: blues
   - Low-level Java drivers (jedis, lettuce, redisson, valkey-glide): reds/oranges/purples
+  - When multiple variants of the same driver exist, auto-shading generates
+    distinct shades within the driver's color family.
 
 Usage:
+    # Legacy layout (subdirectories per client count)
     python scripts/generate_interactive_graphs.py \\
         results/m5.metal-cache.r7g.2xlarge-valkey.8.2.0/reference \\
         --output graphs/interactive/
 
+    # Flat layout (from run_benchmark_matrix.py)
     python scripts/generate_interactive_graphs.py \\
-        results/m5.metal-cache.r7g.2xlarge-valkey.8.2.0/reference \\
+        results/valkey-glide-thread-sweep/ \\
+        --output graphs/interactive/valkey-glide-thread-sweep/
+
+    # Custom reference driver and title
+    python scripts/generate_interactive_graphs.py \\
+        results/m5.metal/run1 \\
         --output graphs/interactive/ \\
-        --title "m5.metal → cache.r7g.2xlarge (Valkey 8.0.2)"
+        --title "m5.metal → cache.r7g.2xlarge (Valkey 8.0.2)" \\
+        --reference valkey-glide
 """
 
 import argparse
@@ -243,6 +278,29 @@ def extract_total_rps(records):
     return rps_values
 
 
+def extract_latency_percentiles(records):
+    """From a list of STEADY records, extract per-command latency percentiles.
+
+    Returns dict:
+        { (command, percentile): [value_run1, value_run2, ...] }
+    where percentile is one of 'p50', 'p95', 'p99', 'p999'
+    and values are in microseconds.
+    """
+    PERCENTILES = ["p50", "p95", "p99", "p999"]
+    result = defaultdict(list)
+
+    for rec in records:
+        metrics = rec.get("metrics", {})
+        for cmd_name, cmd_data in metrics.items():
+            summary = cmd_data.get("latency", {}).get("summary", {})
+            for pct in PERCENTILES:
+                val = summary.get(pct)
+                if val is not None:
+                    result[(cmd_name, pct)].append(val)
+
+    return result
+
+
 def load_all_data(results_dir):
     """
     Load all benchmark data with consensus outlier filtering.
@@ -266,8 +324,8 @@ def load_all_data(results_dir):
             continue
 
         for ndjson_file in sorted(subdir.glob("*.ndjson")):
-            # Skip .cpu.ndjson files
-            if ndjson_file.name.endswith(".cpu.ndjson"):
+            # Skip .system.ndjson files
+            if ndjson_file.name.endswith(".system.ndjson"):
                 continue
             driver = ndjson_file.stem
             records = load_steady_records(ndjson_file)
@@ -307,6 +365,146 @@ def load_all_data(results_dir):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Latency Data Loading
+# ═══════════════════════════════════════════════════════════════════════════════
+
+LATENCY_PERCENTILES = ["p50", "p95", "p99", "p999"]
+
+
+def load_latency_data(results_dir, rps_outlier_map=None):
+    """Load per-command latency percentile data with RPS-correlated outlier filtering.
+
+    For each driver and client count, extracts latency percentiles from STEADY
+    records and averages them across non-outlier runs.
+
+    Args:
+        results_dir: Path to the results directory.
+        rps_outlier_map: dict[(driver, client_count)] -> set of outlier run indices
+            from load_all_data(). Ensures latency charts use the same run set as RPS.
+
+    Returns:
+        latency_data: dict[(driver, command, percentile)] = [(client_count, avg_us), ...]
+            sorted by client_count
+        commands: sorted list of command names found (e.g. ['GET', 'SET'])
+    """
+    if rps_outlier_map is None:
+        rps_outlier_map = {}
+
+    # Accumulator: (driver, command, percentile) -> list of (client_count, avg_value)
+    latency_data = defaultdict(list)
+    commands_found = set()
+
+    for subdir in sorted(results_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        client_count = parse_client_count(subdir.name)
+        if client_count is None:
+            continue
+
+        for ndjson_file in sorted(subdir.glob("*.ndjson")):
+            if ndjson_file.name.endswith(".system.ndjson"):
+                continue
+            driver = ndjson_file.stem
+            records = load_steady_records(ndjson_file)
+            if not records:
+                continue
+
+            pct_data = extract_latency_percentiles(records)
+            if not pct_data:
+                continue
+
+            outlier_indices = rps_outlier_map.get((driver, client_count), set())
+
+            for (cmd, pct), values in pct_data.items():
+                commands_found.add(cmd)
+                clean = [v for i, v in enumerate(values) if i not in outlier_indices]
+                if clean:
+                    latency_data[(driver, cmd, pct)].append((client_count, mean(clean)))
+
+    # Sort by client count
+    for key in latency_data:
+        latency_data[key].sort(key=lambda x: x[0])
+
+    return latency_data, sorted(commands_found)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Driver Version Extraction
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def extract_driver_versions(results_dir):
+    """Extract driver version info from NDJSON metadata.
+
+    Scans the first STEADY record of each driver to extract:
+      - primary_driver_version
+      - secondary_driver_id + secondary_driver_version (for spring-data-* wrappers)
+
+    Returns:
+        versions: dict[driver_name] = {
+            "primary_version": "...",
+            "secondary_id": "..." or None,
+            "secondary_version": "..." or None,
+            "label": "driver (primary_ver)" or "driver (primary_ver / secondary_id secondary_ver)"
+        }
+    """
+    versions = {}
+
+    for subdir in sorted(results_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        if parse_client_count(subdir.name) is None:
+            continue
+
+        for ndjson_file in sorted(subdir.glob("*.ndjson")):
+            if ndjson_file.name.endswith(".system.ndjson"):
+                continue
+            driver = ndjson_file.stem
+            if driver in versions:
+                continue  # Already found version for this driver
+
+            try:
+                with open(ndjson_file) as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            if data.get("phase", {}).get("id") != "STEADY":
+                                continue
+                            meta = data.get("metadata", {})
+                            primary_ver = meta.get("primary_driver_version")
+                            secondary_id = meta.get("secondary_driver_id")
+                            secondary_ver = meta.get("secondary_driver_version")
+
+                            if primary_ver:
+                                label = f"{driver} ({primary_ver})"
+                                if secondary_id and secondary_ver:
+                                    label = f"{driver} ({primary_ver} / {secondary_id} {secondary_ver})"
+
+                                versions[driver] = {
+                                    "primary_version": primary_ver,
+                                    "secondary_id": secondary_id,
+                                    "secondary_version": secondary_ver,
+                                    "label": label,
+                                }
+                            break  # Only need first STEADY record
+                        except json.JSONDecodeError:
+                            continue
+            except (OSError, IOError):
+                continue
+
+    return versions
+
+
+def get_driver_label(driver, driver_versions):
+    """Get display label for a driver, including version info if available."""
+    if driver_versions and driver in driver_versions:
+        return driver_versions[driver]["label"]
+    return driver
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # CPU Data Loading
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -324,7 +522,7 @@ def parse_iso_to_epoch(iso_str):
 
 
 def load_cpu_samples(cpu_ndjson_path):
-    """Load all CPU samples from a .cpu.ndjson file.
+    """Load all CPU samples from a .system.ndjson file.
 
     Returns list of (epoch, cpu_percent) tuples.
     """
@@ -377,7 +575,7 @@ def compute_avg_cpu_for_window(samples, start_epoch, end_epoch):
 def load_cpu_data(results_dir, rps_outlier_map=None):
     """Load CPU data correlated with STEADY phase windows.
 
-    For each driver and client count, reads the .cpu.ndjson file and the
+    For each driver and client count, reads the .system.ndjson file and the
     corresponding .ndjson file, extracts STEADY phase time windows, and
     computes average CPU% during each STEADY window.
 
@@ -408,12 +606,12 @@ def load_cpu_data(results_dir, rps_outlier_map=None):
             continue
 
         for ndjson_file in sorted(subdir.glob("*.ndjson")):
-            # Skip .cpu.ndjson files
-            if ndjson_file.name.endswith(".cpu.ndjson"):
+            # Skip .system.ndjson files
+            if ndjson_file.name.endswith(".system.ndjson"):
                 continue
 
             driver = ndjson_file.stem
-            cpu_file = subdir / f"{driver}.cpu.ndjson"
+            cpu_file = subdir / f"{driver}.system.ndjson"
             if not cpu_file.exists():
                 continue
 
@@ -520,13 +718,438 @@ def get_driver_family(driver):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Auto-Shade Color Generation (for multi-variant per driver)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Base hue/color per driver name (used for auto-shading when a driver has
+# multiple config variants). The base color is the "600" shade; lighter/darker
+# variants are generated automatically.
+DRIVER_BASE_COLORS = {
+    "spring-data-valkey-glide":   (174, 63, 48),  # teal HSL approx
+    "spring-data-valkey-jedis":   (122, 50, 45),
+    "spring-data-valkey-lettuce": (88, 47, 48),
+    "spring-data-redis-jedis":    (211, 79, 50),
+    "spring-data-redis-lettuce":  (232, 43, 55),
+    "valkey-glide":               (2, 76, 55),
+    "jedis":                      (33, 96, 49),
+    "lettuce":                    (14, 89, 50),
+    "redisson":                   (277, 65, 40),
+}
+
+# Line dash patterns for distinguishing variants
+LINE_DASHES = ["solid", "dash", "dot", "dashdot", "longdash", "longdashdot"]
+
+
+def _hsl_to_hex(h, s, l):
+    """Convert HSL to hex color string."""
+    s = s / 100.0
+    l = l / 100.0
+    c = (1 - abs(2 * l - 1)) * s
+    x = c * (1 - abs((h / 60) % 2 - 1))
+    m = l - c / 2
+
+    if h < 60:
+        r, g, b = c, x, 0
+    elif h < 120:
+        r, g, b = x, c, 0
+    elif h < 180:
+        r, g, b = 0, c, x
+    elif h < 240:
+        r, g, b = 0, x, c
+    elif h < 300:
+        r, g, b = x, 0, c
+    else:
+        r, g, b = c, 0, x
+
+    r = int((r + m) * 255)
+    g = int((g + m) * 255)
+    b = int((b + m) * 255)
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def assign_variant_colors(series_labels, manifest=None):
+    """Assign colors to series labels, auto-shading when multiple variants of the same driver exist.
+
+    Args:
+        series_labels: list of series label strings
+        manifest: parsed _manifest.json dict (optional)
+
+    Returns:
+        colors: dict[label] -> hex color string
+        dashes: dict[label] -> dash pattern string
+        families: dict[label] -> family name for legend grouping
+        display_labels: dict[label] -> rich display label
+    """
+    colors = {}
+    dashes = {}
+    families = {}
+    display_labels = {}
+
+    # Group series by driver name
+    driver_groups = defaultdict(list)
+    for label in series_labels:
+        driver_name = _infer_driver_name(label, manifest)
+        driver_groups[driver_name].append(label)
+
+    for driver_name, labels in driver_groups.items():
+        base_hsl = DRIVER_BASE_COLORS.get(driver_name)
+        family = get_driver_family(driver_name)
+
+        if len(labels) == 1:
+            # Single variant — use the standard color
+            label = labels[0]
+            colors[label] = get_driver_color(driver_name)
+            dashes[label] = "solid"
+            families[label] = family
+            display_labels[label] = _build_display_label(label, manifest)
+        else:
+            # Multiple variants — generate shades
+            h, s, l = base_hsl if base_hsl else (0, 0, 50)
+            n = len(labels)
+
+            # Spread lightness from 30% to 70% around the base
+            l_min = max(25, l - 20)
+            l_max = min(75, l + 20)
+
+            for i, label in enumerate(sorted(labels)):
+                if n > 1:
+                    variant_l = l_min + (l_max - l_min) * i / (n - 1)
+                else:
+                    variant_l = l
+                colors[label] = _hsl_to_hex(h, s, variant_l)
+                dashes[label] = LINE_DASHES[i % len(LINE_DASHES)]
+                families[label] = family
+                display_labels[label] = _build_display_label(label, manifest)
+
+    return colors, dashes, families, display_labels
+
+
+def _infer_driver_name(label, manifest=None):
+    """Infer the base driver name from a series label.
+
+    If a manifest is available, uses the driver_name field.
+    Otherwise, tries to match known driver names as a prefix of the label.
+    """
+    if manifest and "variants" in manifest:
+        variant_info = manifest["variants"].get(label, {})
+        driver_name = variant_info.get("driver_name")
+        if driver_name:
+            return driver_name
+
+    # Heuristic: try matching known driver names (longest first)
+    # Labels use @ as separator: "driver-name@param1=val,param2=val"
+    known = sorted(DRIVER_COLORS.keys(), key=len, reverse=True)
+    for name in known:
+        if label == name or label.startswith(name + "@"):
+            return name
+
+    return label
+
+
+def _build_display_label(label, manifest=None):
+    """Build a rich display label from manifest metadata."""
+    if not manifest or "variants" not in manifest:
+        return label
+
+    variant_info = manifest["variants"].get(label, {})
+    if not variant_info:
+        return label
+
+    driver_name = variant_info.get("driver_name", label)
+    params = variant_info.get("params", {})
+    bindings = variant_info.get("bindings", {})
+
+    if not params and not bindings:
+        return label
+
+    parts = [driver_name]
+    for k, v in sorted(params.items()):
+        if k == "env" and isinstance(v, dict):
+            for ek, ev in sorted(v.items()):
+                short = ek.replace("GLIDE_TOKIO_WORKER_THREADS", "tokio") \
+                          .replace("GLIDE_CALLBACK_WORKER_THREADS", "callback")
+                parts.append(f"{short}={ev}")
+        else:
+            parts.append(f"{k}={v}")
+    for k, v in sorted(bindings.items()):
+        ref = v[1:] if isinstance(v, str) and v.startswith("$") else v
+        parts.append(f"{k}={ref}")
+
+    return " | ".join([parts[0], ", ".join(parts[1:])]) if len(parts) > 1 else parts[0]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Layout Detection & Manifest Loading
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def detect_layout(results_dir):
+    """Detect whether the results directory uses legacy or flat layout.
+
+    Legacy: has subdirectories matching N-clients/ pattern.
+    Flat: has .ndjson files directly in the directory (no subdirs with client counts).
+
+    Returns 'legacy' or 'flat'.
+    """
+    has_client_subdirs = False
+    has_flat_ndjson = False
+
+    for item in results_dir.iterdir():
+        if item.is_dir() and parse_client_count(item.name) is not None:
+            has_client_subdirs = True
+        if item.is_file() and item.name.endswith(".ndjson") and not item.name.startswith("_"):
+            if not item.name.endswith(".system.ndjson"):
+                has_flat_ndjson = True
+
+    if has_client_subdirs:
+        return "legacy"
+    if has_flat_ndjson:
+        return "flat"
+    return "legacy"  # default fallback
+
+
+def load_manifest(results_dir):
+    """Load _manifest.json from results directory if it exists.
+
+    Returns manifest dict or None.
+    """
+    manifest_path = results_dir / "_manifest.json"
+    if manifest_path.exists():
+        try:
+            with open(manifest_path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: Failed to load manifest: {e}", file=sys.stderr)
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Flat Layout Data Loading
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_all_data_flat(results_dir):
+    """Load benchmark data from flat layout (one NDJSON per series, all client counts inside).
+
+    Groups STEADY records by phase.connections to build per-client-count data points.
+
+    Returns same format as load_all_data():
+        data[series_label] = [(client_count, avg_rps), ...] sorted by client_count
+        outlier_stats: dict with filtering statistics
+        rps_outlier_map: dict[(series_label, client_count)] = set of outlier run indices
+    """
+    data = defaultdict(list)
+    total_runs = 0
+    discarded_runs = 0
+    rps_outlier_map = {}
+
+    for ndjson_file in sorted(results_dir.glob("*.ndjson")):
+        if ndjson_file.name.endswith(".system.ndjson"):
+            continue
+        if ndjson_file.name.startswith("_"):
+            continue
+
+        series_label = ndjson_file.stem
+        records = load_steady_records(ndjson_file)
+        if not records:
+            continue
+
+        # Group records by connection count
+        by_connections = defaultdict(list)
+        for rec in records:
+            cc = rec.get("phase", {}).get("connections")
+            if cc is not None:
+                by_connections[cc].append(rec)
+
+        for client_count, cc_records in sorted(by_connections.items()):
+            rps_values = extract_total_rps(cc_records)
+            if not rps_values:
+                continue
+
+            total_runs += len(rps_values)
+
+            outlier_indices = find_consensus_outliers(rps_values)
+            discarded_runs += len(outlier_indices)
+
+            rps_outlier_map[(series_label, client_count)] = outlier_indices
+
+            clean_values = [v for i, v in enumerate(rps_values) if i not in outlier_indices]
+            if clean_values:
+                data[series_label].append((client_count, mean(clean_values)))
+
+    for label in data:
+        data[label].sort(key=lambda x: x[0])
+
+    stats = {
+        "total_runs": total_runs,
+        "discarded_runs": discarded_runs,
+        "kept_runs": total_runs - discarded_runs,
+    }
+    return data, stats, rps_outlier_map
+
+
+def load_latency_data_flat(results_dir, rps_outlier_map=None):
+    """Load latency data from flat layout."""
+    if rps_outlier_map is None:
+        rps_outlier_map = {}
+
+    latency_data = defaultdict(list)
+    commands_found = set()
+
+    for ndjson_file in sorted(results_dir.glob("*.ndjson")):
+        if ndjson_file.name.endswith(".system.ndjson"):
+            continue
+        if ndjson_file.name.startswith("_"):
+            continue
+
+        series_label = ndjson_file.stem
+        records = load_steady_records(ndjson_file)
+        if not records:
+            continue
+
+        by_connections = defaultdict(list)
+        for rec in records:
+            cc = rec.get("phase", {}).get("connections")
+            if cc is not None:
+                by_connections[cc].append(rec)
+
+        for client_count, cc_records in sorted(by_connections.items()):
+            pct_data = extract_latency_percentiles(cc_records)
+            if not pct_data:
+                continue
+
+            outlier_indices = rps_outlier_map.get((series_label, client_count), set())
+
+            for (cmd, pct), values in pct_data.items():
+                commands_found.add(cmd)
+                clean = [v for i, v in enumerate(values) if i not in outlier_indices]
+                if clean:
+                    latency_data[(series_label, cmd, pct)].append((client_count, mean(clean)))
+
+    for key in latency_data:
+        latency_data[key].sort(key=lambda x: x[0])
+
+    return latency_data, sorted(commands_found)
+
+
+def extract_driver_versions_flat(results_dir):
+    """Extract driver versions from flat layout NDJSON files."""
+    versions = {}
+
+    for ndjson_file in sorted(results_dir.glob("*.ndjson")):
+        if ndjson_file.name.endswith(".system.ndjson"):
+            continue
+        if ndjson_file.name.startswith("_"):
+            continue
+
+        series_label = ndjson_file.stem
+        if series_label in versions:
+            continue
+
+        try:
+            with open(ndjson_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        if rec.get("phase", {}).get("id") != "STEADY":
+                            continue
+                        meta = rec.get("metadata", {})
+                        primary_ver = meta.get("primary_driver_version")
+                        secondary_id = meta.get("secondary_driver_id")
+                        secondary_ver = meta.get("secondary_driver_version")
+
+                        if primary_ver:
+                            label = f"{series_label} ({primary_ver})"
+                            if secondary_id and secondary_ver:
+                                label = f"{series_label} ({primary_ver} / {secondary_id} {secondary_ver})"
+                            versions[series_label] = {
+                                "primary_version": primary_ver,
+                                "secondary_id": secondary_id,
+                                "secondary_version": secondary_ver,
+                                "label": label,
+                            }
+                        break
+                    except json.JSONDecodeError:
+                        continue
+        except (OSError, IOError):
+            continue
+
+    return versions
+
+
+def load_cpu_data_flat(results_dir, rps_outlier_map=None):
+    """Load CPU data from flat layout."""
+    if rps_outlier_map is None:
+        rps_outlier_map = {}
+
+    cpu_data = defaultdict(list)
+    has_data = False
+
+    for ndjson_file in sorted(results_dir.glob("*.ndjson")):
+        if ndjson_file.name.endswith(".system.ndjson"):
+            continue
+        if ndjson_file.name.startswith("_"):
+            continue
+
+        series_label = ndjson_file.stem
+        cpu_file = results_dir / f"{series_label}.system.ndjson"
+        if not cpu_file.exists():
+            continue
+
+        records = load_steady_records(ndjson_file)
+        if not records:
+            continue
+
+        cpu_samples = load_cpu_samples(cpu_file)
+        if not cpu_samples:
+            continue
+
+        # Group records by connections
+        by_connections = defaultdict(list)
+        for rec in records:
+            cc = rec.get("phase", {}).get("connections")
+            if cc is not None:
+                by_connections[cc].append(rec)
+
+        for client_count, cc_records in sorted(by_connections.items()):
+            windows = extract_steady_time_windows(cc_records)
+            if not windows:
+                continue
+
+            cpu_values = []
+            for start_e, end_e in windows:
+                avg = compute_avg_cpu_for_window(cpu_samples, start_e, end_e)
+                if avg is not None:
+                    cpu_values.append(avg)
+
+            if not cpu_values:
+                continue
+
+            has_data = True
+
+            outlier_indices = rps_outlier_map.get((series_label, client_count), set())
+            clean = [v for i, v in enumerate(cpu_values) if i not in outlier_indices]
+
+            if clean:
+                cpu_data[series_label].append((client_count, mean(clean)))
+
+    for label in cpu_data:
+        cpu_data[label].sort(key=lambda x: x[0])
+
+    return cpu_data, has_data
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # HTML Generation with Plotly.js
 # ═══════════════════════════════════════════════════════════════════════════════
 
 REFERENCE_DRIVER = "spring-data-valkey-glide"
 
 
-def _build_traces_for_family(data, drivers, family, family_label):
+def _build_traces_for_family(data, drivers, family, family_label,
+                              driver_versions=None, hover_value_label="RPS",
+                              hover_value_fmt="%{y:,.0f}"):
     """Build Plotly traces for a list of drivers in a family."""
     traces = []
     for driver in sorted(drivers):
@@ -536,32 +1159,34 @@ def _build_traces_for_family(data, drivers, family, family_label):
         x = [p[0] for p in points]
         y = [p[1] for p in points]
         color = get_driver_color(driver)
+        label = get_driver_label(driver, driver_versions)
 
         traces.append({
             "x": x,
             "y": y,
             "type": "scatter",
             "mode": "lines+markers",
-            "name": driver,
+            "name": label,
             "legendgroup": family,
             "legendgrouptitle": {"text": family_label},
             "line": {"color": color, "width": 2.5},
             "marker": {"size": 8, "color": color},
             "hovertemplate": (
-                f"<b>{driver}</b><br>"
+                f"<b>{label}</b><br>"
                 "Clients: %{x}<br>"
-                "RPS: %{y:,.0f}<br>"
+                f"{hover_value_label}: {hover_value_fmt}<br>"
                 "<extra></extra>"
             ),
         })
     return traces
 
 
-def build_scalability_traces(data):
-    """Build Plotly traces for the scalability chart (total RPS vs client count)."""
+def _build_family_grouped_traces(data, driver_versions=None,
+                                  hover_value_label="RPS",
+                                  hover_value_fmt="%{y:,.0f}"):
+    """Build Plotly traces grouped by driver family."""
     traces = []
 
-    # Group drivers by family
     family_drivers = defaultdict(list)
     for driver in data:
         family = get_driver_family(driver)
@@ -570,16 +1195,61 @@ def build_scalability_traces(data):
     for family in FAMILY_ORDER:
         family_label = FAMILY_LABELS.get(family, family)
         traces.extend(_build_traces_for_family(
-            data, family_drivers.get(family, []), family, family_label))
+            data, family_drivers.get(family, []), family, family_label,
+            driver_versions=driver_versions,
+            hover_value_label=hover_value_label,
+            hover_value_fmt=hover_value_fmt))
 
     # Also include "other" family if present
     traces.extend(_build_traces_for_family(
-        data, family_drivers.get("other", []), "other", "Other"))
+        data, family_drivers.get("other", []), "other", "Other",
+        driver_versions=driver_versions,
+        hover_value_label=hover_value_label,
+        hover_value_fmt=hover_value_fmt))
 
     return traces
 
 
-def build_delta_traces(data):
+def build_scalability_traces(data, driver_versions=None):
+    """Build Plotly traces for the scalability chart (total RPS vs client count)."""
+    return _build_family_grouped_traces(
+        data, driver_versions=driver_versions,
+        hover_value_label="RPS", hover_value_fmt="%{y:,.0f}")
+
+
+def build_latency_traces(latency_data, command, percentile, driver_versions=None):
+    """Build Plotly traces for a latency percentile chart.
+
+    Reshapes latency_data[(driver, command, percentile)] into
+    a driver -> [(client_count, value)] dict, then uses the standard
+    family-grouped trace builder.
+
+    Args:
+        latency_data: dict from load_latency_data()
+        command: e.g. 'GET' or 'SET'
+        percentile: e.g. 'p50', 'p95', 'p99', 'p999'
+        driver_versions: dict from extract_driver_versions()
+
+    Returns:
+        list of Plotly trace dicts
+    """
+    # Reshape: driver -> [(client_count, avg_latency_us)]
+    per_driver = {}
+    for (drv, cmd, pct), points in latency_data.items():
+        if cmd == command and pct == percentile:
+            per_driver[drv] = points
+
+    if not per_driver:
+        return []
+
+    pct_label = percentile.upper().replace("P", "p")  # p50, p95, p99, p999
+    return _build_family_grouped_traces(
+        per_driver, driver_versions=driver_versions,
+        hover_value_label=f"{command} {pct_label} Latency (µs)",
+        hover_value_fmt="%{y:,.0f}")
+
+
+def build_delta_traces(data, driver_versions=None):
     """Build Plotly traces for delta chart (% glide advantage vs other drivers).
 
     Delta = ((glide_rps - other_rps) / other_rps) * 100
@@ -620,19 +1290,20 @@ def build_delta_traces(data):
                 continue
 
             color = get_driver_color(driver)
+            label = get_driver_label(driver, driver_versions)
 
             result.append({
                 "x": x,
                 "y": y,
                 "type": "scatter",
                 "mode": "lines+markers",
-                "name": driver,
+                "name": label,
                 "legendgroup": family,
                 "legendgrouptitle": {"text": family_label},
                 "line": {"color": color, "width": 2.5},
                 "marker": {"size": 8, "color": color},
                 "hovertemplate": (
-                    f"<b>{driver}</b><br>"
+                    f"<b>{label}</b><br>"
                     "Clients: %{x}<br>"
                     "Delta: %{y:+.1f}%<br>"
                     "<extra></extra>"
@@ -803,8 +1474,9 @@ def build_efficiency_delta_traces(eff_data):
     return traces
 
 
-def generate_html(data, stats, title_prefix, output_path, cpu_data=None):
-    """Generate a self-contained interactive HTML file with scalability + delta + CPU charts."""
+def generate_html(data, stats, title_prefix, output_path, cpu_data=None,
+                  latency_data=None, latency_commands=None, driver_versions=None):
+    """Generate a self-contained interactive HTML file with scalability + delta + latency + CPU charts."""
     all_client_counts = sorted(set(
         cc for points in data.values()
         for cc, _ in points
@@ -814,7 +1486,7 @@ def generate_html(data, stats, title_prefix, output_path, cpu_data=None):
     charts = []
 
     # Scalability chart
-    scal_traces = build_scalability_traces(data)
+    scal_traces = build_scalability_traces(data, driver_versions=driver_versions)
     scal_layout = {
         "title": {
             "text": "RPS Scalability — Total Workload Throughput",
@@ -842,7 +1514,7 @@ def generate_html(data, stats, title_prefix, output_path, cpu_data=None):
     charts.append({"traces": scal_traces, "layout": scal_layout, "id": "scalability-total"})
 
     # Delta chart
-    delta_traces = build_delta_traces(data)
+    delta_traces = build_delta_traces(data, driver_versions=driver_versions)
     delta_layout = {
         "title": {
             "text": f"{REFERENCE_DRIVER} Advantage — Total Workload Throughput",
@@ -876,6 +1548,43 @@ def generate_html(data, stats, title_prefix, output_path, cpu_data=None):
         }],
     }
     charts.append({"traces": delta_traces, "layout": delta_layout, "id": "delta-total"})
+
+    # Latency charts (per command × percentile) — after RPS, before CPU
+    if latency_data and latency_commands:
+        PERCENTILE_LABELS = {"p50": "p50 (Median)", "p95": "p95", "p99": "p99", "p999": "p99.9"}
+        for cmd in latency_commands:
+            for pct in LATENCY_PERCENTILES:
+                lat_traces = build_latency_traces(
+                    latency_data, cmd, pct, driver_versions=driver_versions)
+                if not lat_traces:
+                    continue
+                pct_display = PERCENTILE_LABELS.get(pct, pct)
+                chart_id = f"latency-{cmd.lower()}-{pct}"
+                lat_layout = {
+                    "title": {
+                        "text": f"Latency {pct_display} — {cmd} Command",
+                        "font": {"size": 18},
+                    },
+                    "xaxis": {
+                        "title": "Client Count",
+                        "type": "log",
+                        "tickvals": all_client_counts,
+                        "ticktext": [str(c) for c in all_client_counts],
+                    },
+                    "yaxis": {
+                        "title": "Latency (µs)",
+                        "rangemode": "tozero",
+                        "separatethousands": True,
+                    },
+                    "legend": {
+                        "groupclick": "toggleitem",
+                        "tracegroupgap": 10,
+                    },
+                    "hovermode": "closest",
+                    "template": "plotly_white",
+                    "height": 600,
+                }
+                charts.append({"traces": lat_traces, "layout": lat_layout, "id": chart_id})
 
     # CPU charts (only if CPU data is available)
     if cpu_data:
@@ -1084,11 +1793,30 @@ def generate_html(data, stats, title_prefix, output_path, cpu_data=None):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate interactive HTML benchmark graphs with Plotly.js"
+        description="Generate interactive HTML benchmark graphs with Plotly.js",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Supports two directory layouts (auto-detected):
+
+  Legacy layout — subdirectories per client count:
+    results/<N>-clients/<driver>.ndjson
+
+  Flat layout — one NDJSON per series (from run_benchmark_matrix.py):
+    results/<label>.ndjson
+    results/_manifest.json  (optional)
+
+Examples:
+  # Legacy layout
+  python scripts/generate_interactive_graphs.py results/m5.metal/run1
+
+  # Flat layout with custom reference
+  python scripts/generate_interactive_graphs.py results/glide-sweep/ \\
+      --reference spring-data-valkey-glide@cb=16,tw=16,pool_size=connections
+""",
     )
     parser.add_argument(
         "results_dir",
-        help="Directory containing subdirectories like 1-clients/, 2-clients/, etc.",
+        help="Directory containing benchmark results (legacy or flat layout)",
     )
     parser.add_argument(
         "--output", "-o",
@@ -1100,7 +1828,117 @@ def parse_args():
         default="",
         help="Title prefix for the report (e.g. environment name)",
     )
+    parser.add_argument(
+        "--reference", "-r",
+        default=None,
+        help="Reference driver/series for delta charts (default: spring-data-valkey-glide). "
+             "Use the series label (filename stem) for flat layout results.",
+    )
     return parser.parse_args()
+
+
+def _build_variant_traces(data, variant_colors, variant_dashes, variant_families,
+                           variant_display_labels, hover_value_label="RPS",
+                           hover_value_fmt="%{y:,.0f}"):
+    """Build Plotly traces using auto-shaded variant colors from manifest-aware assignment."""
+    traces = []
+
+    # Group by family
+    family_labels_map = defaultdict(list)
+    for label in data:
+        family = variant_families.get(label, "other")
+        family_labels_map[family].append(label)
+
+    all_families = list(dict.fromkeys(
+        [f for f in FAMILY_ORDER if f in family_labels_map] +
+        [f for f in family_labels_map if f not in FAMILY_ORDER]
+    ))
+
+    for family in all_families:
+        family_display = FAMILY_LABELS.get(family, family.replace("-", " ").title())
+        for label in sorted(family_labels_map.get(family, [])):
+            points = data.get(label, [])
+            if not points:
+                continue
+            x = [p[0] for p in points]
+            y = [p[1] for p in points]
+            color = variant_colors.get(label, "#999999")
+            dash = variant_dashes.get(label, "solid")
+            display = variant_display_labels.get(label, label)
+
+            traces.append({
+                "x": x,
+                "y": y,
+                "type": "scatter",
+                "mode": "lines+markers",
+                "name": display,
+                "legendgroup": family,
+                "legendgrouptitle": {"text": family_display},
+                "line": {"color": color, "width": 2.5, "dash": dash},
+                "marker": {"size": 8, "color": color},
+                "hovertemplate": (
+                    f"<b>{display}</b><br>"
+                    "Clients: %{x}<br>"
+                    f"{hover_value_label}: {hover_value_fmt}<br>"
+                    "<extra></extra>"
+                ),
+            })
+    return traces
+
+
+def _build_variant_delta_traces(data, reference_label, variant_colors, variant_dashes,
+                                 variant_families, variant_display_labels):
+    """Build delta traces for flat/variant mode."""
+    traces = []
+    ref_points = data.get(reference_label, [])
+    if not ref_points:
+        return traces
+    ref_rps = {cc: rps for cc, rps in ref_points}
+
+    family_labels_map = defaultdict(list)
+    for label in data:
+        if label == reference_label:
+            continue
+        family = variant_families.get(label, "other")
+        family_labels_map[family].append(label)
+
+    all_families = list(dict.fromkeys(
+        [f for f in FAMILY_ORDER if f in family_labels_map] +
+        [f for f in family_labels_map if f not in FAMILY_ORDER]
+    ))
+
+    for family in all_families:
+        family_display = FAMILY_LABELS.get(family, family.replace("-", " ").title())
+        for label in sorted(family_labels_map.get(family, [])):
+            points = data.get(label, [])
+            if not points:
+                continue
+            x = []
+            y = []
+            for cc, other_rps in points:
+                if cc in ref_rps and other_rps > 0:
+                    delta_pct = ((ref_rps[cc] - other_rps) / other_rps) * 100.0
+                    x.append(cc)
+                    y.append(round(delta_pct, 2))
+            if not x:
+                continue
+            color = variant_colors.get(label, "#999999")
+            dash = variant_dashes.get(label, "solid")
+            display = variant_display_labels.get(label, label)
+            traces.append({
+                "x": x, "y": y, "type": "scatter", "mode": "lines+markers",
+                "name": display, "legendgroup": family,
+                "legendgrouptitle": {"text": family_display},
+                "line": {"color": color, "width": 2.5, "dash": dash},
+                "marker": {"size": 8, "color": color},
+                "hovertemplate": (
+                    f"<b>{display}</b><br>"
+                    "Clients: %{x}<br>"
+                    "Delta: %{y:+.1f}%<br>"
+                    "<extra></extra>"
+                ),
+            })
+    return traces
 
 
 def main():
@@ -1111,33 +1949,128 @@ def main():
         print(f"Error: {results_dir} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Scanning: {results_dir}")
-    data, stats, rps_outlier_map = load_all_data(results_dir)
+    # Set reference driver
+    global REFERENCE_DRIVER
+    if args.reference:
+        REFERENCE_DRIVER = args.reference
+
+    # Detect layout
+    layout = detect_layout(results_dir)
+    print(f"Scanning: {results_dir} (layout: {layout})")
+
+    # Load manifest (flat layout)
+    manifest = None
+    if layout == "flat":
+        manifest = load_manifest(results_dir)
+        if manifest:
+            print(f"Manifest loaded: {manifest.get('description', '')}")
+            # Auto-detect reference from first series if not specified
+            if not args.reference and manifest.get("variants"):
+                first_label = next(iter(manifest["variants"]))
+                # Only auto-set if there's a single driver (config comparison mode)
+                driver_names = set(v.get("driver_name", "") for v in manifest["variants"].values())
+                if len(driver_names) == 1:
+                    # First variant as reference for single-driver sweep
+                    REFERENCE_DRIVER = first_label
+                    print(f"Auto-selected reference series: {REFERENCE_DRIVER}")
+
+    # Load data based on layout
+    if layout == "flat":
+        data, stats, rps_outlier_map = load_all_data_flat(results_dir)
+    else:
+        data, stats, rps_outlier_map = load_all_data(results_dir)
 
     if not data:
         print("Error: No data found", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Found {len(data)} driver(s)")
+    print(f"Found {len(data)} series")
     print(f"Total runs: {stats['total_runs']}, discarded: {stats['discarded_runs']}, "
           f"kept: {stats['kept_runs']}")
 
     if REFERENCE_DRIVER not in data:
-        print(f"Warning: reference driver '{REFERENCE_DRIVER}' not found in data. "
+        print(f"Warning: reference '{REFERENCE_DRIVER}' not found in data. "
               f"Delta charts will be empty.", file=sys.stderr)
 
-    # Load CPU data (optional — only present if cpu_monitor.py was used)
-    cpu_data, has_cpu = load_cpu_data(results_dir, rps_outlier_map)
-    if has_cpu:
-        print(f"CPU data found for {len(cpu_data)} driver(s)")
+    # For flat layout with manifest: use variant-aware coloring
+    use_variant_mode = (layout == "flat")
+
+    if use_variant_mode:
+        variant_colors, variant_dashes, variant_families, variant_display_labels = \
+            assign_variant_colors(list(data.keys()), manifest)
+
+        # Override DRIVER_COLORS and DRIVER_FAMILIES so existing code paths work too
+        for label, color in variant_colors.items():
+            DRIVER_COLORS[label] = color
+        for label, family in variant_families.items():
+            DRIVER_FAMILIES[label] = family
+
+    # Extract driver versions
+    if layout == "flat":
+        driver_versions = extract_driver_versions_flat(results_dir)
     else:
-        print("No CPU data found (.cpu.ndjson files). CPU charts will be omitted.")
+        driver_versions = extract_driver_versions(results_dir)
+
+    if driver_versions:
+        print(f"Driver versions found for {len(driver_versions)} series:")
+        for drv, info in sorted(driver_versions.items()):
+            print(f"  {info['label']}")
+    else:
+        print("No driver version info found in NDJSON metadata.")
+
+    # If in variant mode with manifest, override driver_versions labels with display labels
+    if use_variant_mode and variant_display_labels:
+        for label, display in variant_display_labels.items():
+            if label not in driver_versions:
+                driver_versions[label] = {"label": display}
+            else:
+                # Append version info to display label
+                ver_info = driver_versions[label]
+                if ver_info.get("primary_version"):
+                    enriched = f"{display} ({ver_info['primary_version']}"
+                    if ver_info.get("secondary_id") and ver_info.get("secondary_version"):
+                        enriched += f" / {ver_info['secondary_id']} {ver_info['secondary_version']}"
+                    enriched += ")"
+                    driver_versions[label]["label"] = enriched
+                else:
+                    driver_versions[label]["label"] = display
+
+    if not driver_versions:
+        driver_versions = None
+
+    # Load latency data
+    if layout == "flat":
+        latency_data, latency_commands = load_latency_data_flat(results_dir, rps_outlier_map)
+    else:
+        latency_data, latency_commands = load_latency_data(results_dir, rps_outlier_map)
+
+    if latency_data:
+        print(f"Latency data found for commands: {', '.join(latency_commands)}")
+    else:
+        print("No latency data found. Latency charts will be omitted.")
+        latency_data = None
+        latency_commands = None
+
+    # Load CPU data
+    if layout == "flat":
+        cpu_data, has_cpu = load_cpu_data_flat(results_dir, rps_outlier_map)
+    else:
+        cpu_data, has_cpu = load_cpu_data(results_dir, rps_outlier_map)
+
+    if has_cpu:
+        print(f"CPU data found for {len(cpu_data)} series")
+    else:
+        print("No CPU data found (.system.ndjson files). CPU charts will be omitted.")
         cpu_data = None
 
     output_dir = Path(args.output)
     output_path = output_dir / "scalability_and_delta.html"
 
-    generate_html(data, stats, args.title, output_path, cpu_data=cpu_data)
+    generate_html(data, stats, args.title, output_path,
+                  cpu_data=cpu_data,
+                  latency_data=latency_data,
+                  latency_commands=latency_commands,
+                  driver_versions=driver_versions)
     print(f"\nDone. Open in browser: {output_path}")
 
 

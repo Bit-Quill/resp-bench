@@ -1,8 +1,8 @@
 {
     "schema_version": "1.0",
     "benchmark_profile": {
-        "name": "Basic Standalone - Single Client",
-        "description": "Reference benchmark: 1M requests, 80/20 GET/SET, 1M keys, 16B key, 512B data, 1 connection",
+        "name": "Basic Standalone - Single Client, 10 seconds STEADY state",
+        "description": "Reference benchmark: 10 seconds STEADY state, 80/20 GET/SET, 100K keys, 16B key, 512B data, 1 connection",
         "version": "1.0.0"
     },
     "phases": [
@@ -17,7 +17,7 @@
                 "requests": 100000
             },
             "keyspace": {
-                "keys_count": 1000000,
+                "keys_count": 100000,
                 "key_size_bytes": 16,
                 "key_prefix": "bench:",
                 "generation_alg": "sequential_int"
@@ -37,11 +37,11 @@
             "cps_limit": -1,
             "rps_limit": -1,
             "completion": {
-                "type": "requests",
-                "requests": 1000000
+                "type": "duration",
+                "seconds": 10
             },
             "keyspace": {
-                "keys_count": 1000000,
+                "keys_count": 100000,
                 "key_size_bytes": 16,
                 "key_prefix": "bench:",
                 "generation_alg": "uniform_rand",

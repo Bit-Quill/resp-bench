@@ -1,0 +1,27 @@
+{
+    "description": "Lettuce pool size sweep comparing fixed pool sizes vs pool=connections",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 10,
+    "dimensions": {
+        "connections": [
+            1,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/spring-data-valkey-lettuce.json"
+        ],
+        "pool_size": [
+            8,
+            32,
+            "$connections"
+        ],
+        "use_pooling": true,
+        "share_native_connection": false
+    }
+}

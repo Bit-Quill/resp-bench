@@ -1,0 +1,26 @@
+{
+    "description": "Compare all drivers with default (out-of-box) configuration across client counts",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 5,
+    "dimensions": {
+        "connections": [
+            1,
+            2,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/default/valkey-glide.json",
+            "configs/drivers/default/jedis.json",
+            "configs/drivers/default/lettuce.json",
+            "configs/drivers/default/redisson.json",
+            "configs/drivers/default/spring-data-valkey-glide.json",
+            "configs/drivers/default/spring-data-valkey-jedis.json",
+            "configs/drivers/default/spring-data-valkey-lettuce.json",
+            "configs/drivers/default/spring-data-redis-jedis.json",
+            "configs/drivers/default/spring-data-redis-lettuce.json"
+        ]
+    }
+}

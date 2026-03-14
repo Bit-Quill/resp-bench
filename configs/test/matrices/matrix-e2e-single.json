@@ -1,0 +1,10 @@
+{
+    "description": "E2E test: single recording client variant across 2 client counts",
+    "x_axis": "connections",
+    "iterations": 1,
+    "workload_template": "configs/test/workloads/workload-short.json",
+    "dimensions": {
+        "connections": [1, 4],
+        "driver_config": ["configs/test/drivers/recording-slow.json"]
+    }
+}
