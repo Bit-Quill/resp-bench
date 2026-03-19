@@ -79,6 +79,11 @@ public class JedisBenchmarkClient implements BenchmarkClient {
                 configBuilder.password(auth.getPassword());
             }
             
+            // Apply command timeout if configured
+            if (driverConfig.getCommandTimeoutMs() != null) {
+                configBuilder.timeoutMillis(driverConfig.getCommandTimeoutMs());
+            }
+            
             JedisClientConfig clientConfig = configBuilder.build();
             
             if (isClusterMode) {

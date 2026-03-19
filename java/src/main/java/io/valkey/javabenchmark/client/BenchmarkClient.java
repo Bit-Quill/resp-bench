@@ -133,6 +133,18 @@ public interface BenchmarkClient extends AutoCloseable {
     CompletableFuture<TimedResult<Void>> flushDb();
 
     /**
+     * Notify the client that the engine is entering/leaving warmup mode.
+     * 
+     * <p>This is primarily used by {@link io.valkey.javabenchmark.client.impl.RecordingBenchmarkClient}
+     * to suppress error simulation during warmup PINGs, allowing connectivity
+     * checks to pass. Real driver implementations should ignore this
+     * (the default is a no-op).</p>
+     *
+     * @param warmup true when entering warmup, false when leaving
+     */
+    default void setWarmupMode(boolean warmup) { }
+
+    /**
      * Close the client connection and release resources.
      */
     @Override

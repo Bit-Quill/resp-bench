@@ -3,5 +3,6 @@
     "description": "redisson client - high-throughput configuration",
     "driver_id": "redisson",
     "mode": "standalone",
-    "specific_driver_config": {}
+    "specific_driver_config": {},
+    "command_timeout_ms": 10000
 }

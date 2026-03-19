@@ -94,6 +94,11 @@ public class ValkeyGlideBenchmarkClient implements BenchmarkClient {
                     }
                 }
                 
+                // Apply command timeout if configured
+                if (driverConfig.getCommandTimeoutMs() != null) {
+                    configBuilder.requestTimeout(driverConfig.getCommandTimeoutMs());
+                }
+                
                 glideClusterClient = GlideClusterClient.createClient(configBuilder.build()).get();
             } else {
                 var configBuilder = GlideClientConfiguration.builder()
@@ -117,6 +122,11 @@ public class ValkeyGlideBenchmarkClient implements BenchmarkClient {
                                 .password(auth.getPassword())
                                 .build());
                     }
+                }
+                
+                // Apply command timeout if configured
+                if (driverConfig.getCommandTimeoutMs() != null) {
+                    configBuilder.requestTimeout(driverConfig.getCommandTimeoutMs());
                 }
                 
                 glideClient = GlideClient.createClient(configBuilder.build()).get();

@@ -79,6 +79,9 @@ public class RecordingBenchmarkClient implements BenchmarkClient {
     private volatile double errorRate = 0.0;
     private volatile String errorMessage = "Simulated error";
     
+    // Warmup mode — suppresses error simulation during connectivity checks
+    private volatile boolean warmupMode = false;
+    
     // Memory ballast for testing — holds allocated bytes to prevent GC
     private volatile byte[] memoryBallast = null;
     
@@ -168,6 +171,11 @@ public class RecordingBenchmarkClient implements BenchmarkClient {
         
         // Register this instance for test access
         instances.add(this);
+    }
+
+    @Override
+    public void setWarmupMode(boolean warmup) {
+        this.warmupMode = warmup;
     }
 
     @Override
@@ -493,8 +501,10 @@ public class RecordingBenchmarkClient implements BenchmarkClient {
 
     /**
      * Check if this operation should simulate an error.
+     * Returns false during warmup mode to allow connectivity checks to pass.
      */
     private boolean shouldSimulateError() {
+        if (warmupMode) return false;
         if (errorRate <= 0.0) return false;
         if (errorRate >= 1.0) return true;
         return ThreadLocalRandom.current().nextDouble() < errorRate;

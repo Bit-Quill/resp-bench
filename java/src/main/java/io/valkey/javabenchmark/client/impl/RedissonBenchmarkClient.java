@@ -82,10 +82,13 @@ public class RedissonBenchmarkClient implements BenchmarkClient {
             if (driverConfig.isClusterMode()) {
                 var clusterConfig = config.useClusterServers()
                         .addNodeAddress(address)
-                        .setTimeout(10000)
-                        .setConnectTimeout(10000)
                         .setRetryAttempts(1)
                         .setRetryInterval(100);
+                
+                // Apply command timeout if configured
+                if (driverConfig.getCommandTimeoutMs() != null) {
+                    clusterConfig.setTimeout(driverConfig.getCommandTimeoutMs());
+                }
                 
                 if (driverConfig.isTlsEnabled()) {
                     clusterConfig.setSslEnableEndpointIdentification(false);
@@ -101,12 +104,15 @@ public class RedissonBenchmarkClient implements BenchmarkClient {
             } else {
                 var singleConfig = config.useSingleServer()
                         .setAddress(address)
-                        .setTimeout(10000)
-                        .setConnectTimeout(10000)
                         .setRetryAttempts(1)
                         .setRetryInterval(100)
                         .setConnectionMinimumIdleSize(1)
                         .setConnectionPoolSize(64);
+                
+                // Apply command timeout if configured
+                if (driverConfig.getCommandTimeoutMs() != null) {
+                    singleConfig.setTimeout(driverConfig.getCommandTimeoutMs());
+                }
                 
                 if (driverConfig.isTlsEnabled()) {
                     singleConfig.setSslEnableEndpointIdentification(false);

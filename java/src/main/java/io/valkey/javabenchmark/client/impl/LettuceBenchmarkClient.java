@@ -77,8 +77,12 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
             
             RedisURI.Builder uriBuilder = RedisURI.builder()
                     .withHost(host)
-                    .withPort(port)
-                    .withTimeout(Duration.ofSeconds(10));
+                    .withPort(port);
+            
+            // Apply command timeout if configured, otherwise use Lettuce default
+            if (driverConfig.getCommandTimeoutMs() != null) {
+                uriBuilder.withTimeout(Duration.ofMillis(driverConfig.getCommandTimeoutMs()));
+            }
             
             if (driverConfig.isTlsEnabled()) {
                 uriBuilder.withSsl(true);

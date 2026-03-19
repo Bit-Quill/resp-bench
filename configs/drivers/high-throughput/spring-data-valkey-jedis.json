@@ -7,5 +7,6 @@
         "secondary_driver_id": "jedis",
         "use_pooling": true,
         "pool_size": 8
-    }
+    },
+    "command_timeout_ms": 10000
 }
