@@ -32,9 +32,21 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Lettuce implementation of BenchmarkClient.
+ *
+ * <p>All instances share a single {@link RedisClient} (or {@link RedisClusterClient}) via a
+ * static holder with reference counting. Each instance opens its own
+ * {@link StatefulRedisConnection} — a dedicated TCP connection — from the shared client.
+ * This matches how a real application uses Lettuce: one client infrastructure (Netty event
+ * loop group, timer) shared across many connections.</p>
+ *
+ * <p>Without sharing, 512 instances would create 512 separate {@code RedisClient} objects,
+ * each with its own Netty event loop thread and HashedWheelTimer — 1024 extra OS threads
+ * competing for CPU on a 96-vCPU machine.</p>
  *
  * @author Ilia Kolominsky
  */
@@ -42,14 +54,43 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
 
     private static final Logger logger = LoggerFactory.getLogger(LettuceBenchmarkClient.class);
 
-    private RedisClient redisClient;
-    private RedisClusterClient clusterClient;
+    /** Shared RedisClient/ClusterClient state across all instances. */
+    private static final AtomicReference<SharedClient> sharedClientRef = new AtomicReference<>();
+    private static final AtomicInteger refCount = new AtomicInteger(0);
+    private static final Object lock = new Object();
+
+    // Per-instance state: each instance owns one TCP connection
     private StatefulRedisConnection<byte[], byte[]> connection;
     private StatefulRedisClusterConnection<byte[], byte[]> clusterConnection;
     private RedisAsyncCommands<byte[], byte[]> asyncCommands;
     private RedisAdvancedClusterAsyncCommands<byte[], byte[]> clusterAsyncCommands;
     private boolean isClusterMode;
     private boolean connected;
+
+    /**
+     * Shared Lettuce client infrastructure (Netty event loops, timer, DNS).
+     * Created by the first instance, destroyed by the last.
+     */
+    private static class SharedClient {
+        final RedisClient redisClient;          // non-null for standalone
+        final RedisClusterClient clusterClient; // non-null for cluster
+        final RedisURI redisUri;
+        final boolean isCluster;
+
+        SharedClient(RedisClient redisClient, RedisURI redisUri) {
+            this.redisClient = redisClient;
+            this.clusterClient = null;
+            this.redisUri = redisUri;
+            this.isCluster = false;
+        }
+
+        SharedClient(RedisClusterClient clusterClient, RedisURI redisUri) {
+            this.redisClient = null;
+            this.clusterClient = clusterClient;
+            this.redisUri = redisUri;
+            this.isCluster = true;
+        }
+    }
 
     @Override
     public String getDriverId() {
@@ -73,40 +114,34 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
         try {
             this.isClusterMode = driverConfig.isClusterMode();
             
-            String scheme = driverConfig.isTlsEnabled() ? "rediss" : "redis";
-            
-            RedisURI.Builder uriBuilder = RedisURI.builder()
-                    .withHost(host)
-                    .withPort(port);
-            
-            // Apply command timeout if configured, otherwise use Lettuce default
-            if (driverConfig.getCommandTimeoutMs() != null) {
-                uriBuilder.withTimeout(Duration.ofMillis(driverConfig.getCommandTimeoutMs()));
-            }
-            
-            if (driverConfig.isTlsEnabled()) {
-                uriBuilder.withSsl(true);
-            }
-            
-            // Configure authentication if provided
-            if (driverConfig.hasAuth()) {
-                DriverConfig.AuthConfig auth = driverConfig.getAuth();
-                if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
-                    uriBuilder.withAuthentication(auth.getUsername(), auth.getPassword().toCharArray());
+            synchronized (lock) {
+                int refs = refCount.incrementAndGet();
+                
+                if (sharedClientRef.get() == null) {
+                    // First instance — create shared client infrastructure
+                    RedisURI redisUri = buildRedisUri(host, port, driverConfig);
+                    
+                    if (isClusterMode) {
+                        RedisClusterClient clusterClient = RedisClusterClient.create(redisUri);
+                        sharedClientRef.set(new SharedClient(clusterClient, redisUri));
+                    } else {
+                        RedisClient redisClient = RedisClient.create(redisUri);
+                        sharedClientRef.set(new SharedClient(redisClient, redisUri));
+                    }
+                    
+                    logger.info("Created shared Lettuce client infrastructure (ref count: {})", refs);
                 } else {
-                    uriBuilder.withPassword(auth.getPassword().toCharArray());
+                    logger.debug("Reusing shared Lettuce client (ref count: {})", refs);
                 }
             }
             
-            RedisURI redisUri = uriBuilder.build();
-            
-            if (isClusterMode) {
-                clusterClient = RedisClusterClient.create(redisUri);
-                clusterConnection = clusterClient.connect(ByteArrayCodec.INSTANCE);
+            // Open a new TCP connection from the shared client (outside the lock)
+            SharedClient shared = sharedClientRef.get();
+            if (shared.isCluster) {
+                clusterConnection = shared.clusterClient.connect(ByteArrayCodec.INSTANCE);
                 clusterAsyncCommands = clusterConnection.async();
             } else {
-                redisClient = RedisClient.create(redisUri);
-                connection = redisClient.connect(ByteArrayCodec.INSTANCE);
+                connection = shared.redisClient.connect(ByteArrayCodec.INSTANCE);
                 asyncCommands = connection.async();
             }
             
@@ -126,8 +161,37 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
             logger.info("Lettuce connected successfully");
             
         } catch (Exception e) {
+            refCount.decrementAndGet();
             throw new ClientException("Failed to connect Lettuce to " + host + ":" + port, e);
         }
+    }
+
+    /**
+     * Build a RedisURI from the driver configuration.
+     */
+    private static RedisURI buildRedisUri(String host, int port, DriverConfig driverConfig) {
+        RedisURI.Builder uriBuilder = RedisURI.builder()
+                .withHost(host)
+                .withPort(port);
+        
+        if (driverConfig.getCommandTimeoutMs() != null) {
+            uriBuilder.withTimeout(Duration.ofMillis(driverConfig.getCommandTimeoutMs()));
+        }
+        
+        if (driverConfig.isTlsEnabled()) {
+            uriBuilder.withSsl(true);
+        }
+        
+        if (driverConfig.hasAuth()) {
+            DriverConfig.AuthConfig auth = driverConfig.getAuth();
+            if (auth.getUsername() != null && !auth.getUsername().isEmpty()) {
+                uriBuilder.withAuthentication(auth.getUsername(), auth.getPassword().toCharArray());
+            } else {
+                uriBuilder.withPassword(auth.getPassword().toCharArray());
+            }
+        }
+        
+        return uriBuilder.build();
     }
 
     @Override
@@ -195,6 +259,7 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
         logger.info("Closing Lettuce connection");
         connected = false;
         
+        // Close this instance's TCP connection
         if (connection != null) {
             try {
                 connection.close();
@@ -202,6 +267,7 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
                 logger.warn("Error closing Lettuce connection: {}", e.getMessage());
             }
             connection = null;
+            asyncCommands = null;
         }
         
         if (clusterConnection != null) {
@@ -211,24 +277,38 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
                 logger.warn("Error closing Lettuce cluster connection: {}", e.getMessage());
             }
             clusterConnection = null;
+            clusterAsyncCommands = null;
         }
         
-        if (redisClient != null) {
-            try {
-                redisClient.shutdown();
-            } catch (Exception e) {
-                logger.warn("Error shutting down Lettuce client: {}", e.getMessage());
+        // Decrement ref count; last one shuts down the shared client
+        synchronized (lock) {
+            int remaining = refCount.decrementAndGet();
+            
+            if (remaining > 0) {
+                logger.debug("Lettuce connection closed (remaining refs: {})", remaining);
+                return;
             }
-            redisClient = null;
-        }
-        
-        if (clusterClient != null) {
-            try {
-                clusterClient.shutdown();
-            } catch (Exception e) {
-                logger.warn("Error shutting down Lettuce cluster client: {}", e.getMessage());
+            
+            SharedClient shared = sharedClientRef.getAndSet(null);
+            if (shared == null) return;
+            
+            logger.info("Shutting down shared Lettuce client infrastructure");
+            
+            if (shared.redisClient != null) {
+                try {
+                    shared.redisClient.shutdown();
+                } catch (Exception e) {
+                    logger.warn("Error shutting down Lettuce client: {}", e.getMessage());
+                }
             }
-            clusterClient = null;
+            
+            if (shared.clusterClient != null) {
+                try {
+                    shared.clusterClient.shutdown();
+                } catch (Exception e) {
+                    logger.warn("Error shutting down Lettuce cluster client: {}", e.getMessage());
+                }
+            }
         }
     }
 }
