@@ -68,6 +68,9 @@ DRIVER_LANGUAGE_MAP = {
     # Ruby drivers
     "redis-rb": "ruby",
     "valkey-glide-ruby": "ruby",
+    # C# drivers
+    "stackexchange-redis": "csharp",
+    "valkey-glide-csharp": "csharp",
     # Python drivers (future)
     "redis-py": "python",
     "aioredis": "python",
@@ -115,7 +118,7 @@ def parse_args():
     )
     parser.add_argument(
         "--language",
-        choices=["java", "ruby", "python"],
+        choices=["java", "ruby", "csharp", "python"],
         help="Filter results by language (only include drivers for this language)",
     )
     parser.add_argument(

@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "Valkey GLIDE C# client - standalone mode",
+    "driver_id": "valkey-glide-csharp",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

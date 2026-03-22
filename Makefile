@@ -33,6 +33,7 @@ WORK_DIR=$(shell pwd)/work
 	java-build java-test java-run java-clean \
 	python-build python-test python-run python-clean \
 	ruby-build ruby-test ruby-run ruby-clean ruby-info \
+	csharp-build csharp-test csharp-run csharp-clean csharp-info \
 	config-editor-build config-editor-dev
 
 # ============================================================================
@@ -65,6 +66,13 @@ help:
 	@echo "  make ruby-test              Run Ruby tests"
 	@echo "  make ruby-run               Run Ruby benchmark (requires DRIVER and WORKLOAD)"
 	@echo "  make ruby-info              Show supported Ruby drivers and commands"
+	@echo ""
+	@echo "C# Engine:"
+	@echo "  make csharp-build           Build C# benchmark engine"
+	@echo "  make csharp-test            Run C# tests"
+	@echo "  make csharp-run             Run C# benchmark (requires DRIVER and WORKLOAD)"
+	@echo "  make csharp-clean           Clean C# build artifacts"
+	@echo "  make csharp-info            Show supported C# drivers and commands"
 	@echo ""
 	@echo "Config Editor:"
 	@echo "  make config-editor-build    Build config editor UI"
@@ -348,6 +356,38 @@ ruby-info: ruby-build
 	cd ruby && bundle exec ruby bin/resp-bench --info
 
 # ============================================================================
+# C# Engine
+# ============================================================================
+
+CSHARP_PROJECT=csharp/src/RespBench/RespBench.csproj
+
+csharp-build:
+	cd csharp && dotnet build -c Release
+
+csharp-test:
+	cd csharp && dotnet test
+
+csharp-integration-test: server-standalone-start
+	sleep 1
+	cd csharp && VALKEY_HOST=localhost VALKEY_PORT=6379 dotnet test --filter "Category=Integration"
+	$(MAKE) server-standalone-stop
+
+csharp-run: csharp-build
+	dotnet run --project $(CSHARP_PROJECT) -c Release -- \
+		--server $(SERVER) \
+		--driver $(DRIVER) \
+		--workload $(WORKLOAD) \
+		--metrics $(METRICS_OUTPUT)
+
+csharp-clean:
+	cd csharp && dotnet clean
+	rm -rf csharp/src/RespBench/bin csharp/src/RespBench/obj
+	rm -rf csharp/test/RespBench.Tests/bin csharp/test/RespBench.Tests/obj
+
+csharp-info: csharp-build
+	dotnet run --project $(CSHARP_PROJECT) -c Release -- --info
+
+# ============================================================================
 # Config Editor
 # ============================================================================
 
@@ -401,8 +441,8 @@ test-scripts-all: java-build
 # All Languages
 # ============================================================================
 
-build-all: java-build ruby-build python-build
+build-all: java-build ruby-build csharp-build python-build
 
-test-all: java-test ruby-test python-test
+test-all: java-test ruby-test csharp-test python-test
 
-clean-all: java-clean ruby-clean python-clean clean
+clean-all: java-clean ruby-clean csharp-clean python-clean clean

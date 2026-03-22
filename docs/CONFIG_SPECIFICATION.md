@@ -46,6 +46,14 @@ resp-bench uses two JSON configuration files:
 - `spring-data-valkey` - Spring Data Valkey (requires `secondary_driver_id`)
 - `spring-data-redis` - Spring Data Redis (requires `secondary_driver_id`)
 
+**Ruby:**
+- `redis-rb` - redis-rb client
+- `valkey-glide-ruby` - Valkey GLIDE Ruby client
+
+**C#:**
+- `stackexchange-redis` - StackExchange.Redis client
+- `valkey-glide-csharp` - Valkey GLIDE C# client
+
 **Python (planned):**
 - `redis-py` - redis-py synchronous client
 - `redis-py-async` - redis-py async client

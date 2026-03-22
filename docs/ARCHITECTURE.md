@@ -30,7 +30,7 @@ This document describes the architecture of resp-bench and the design decisions 
 │  │            └──────────────┬──────────────┘                  ││
 │  │                           ▼                                 ││
 │  │  ┌─────────────────────────────────────────────────────┐   ││
-│  │  │       Language Engine (Java/Ruby subprocess)         │   ││
+│  │  │       Language Engine (Java/Ruby/C# subprocess)      │   ││
 │  │  │  ┌─────────────┐ ┌─────────────┐ ┌──────────────┐  │   ││
 │  │  │  │Key Generator│ │Rate Limiter │ │Metrics (HDR)  │  │   ││
 │  │  │  └─────────────┘ └─────────────┘ └──────────────┘  │   ││
@@ -136,6 +136,16 @@ public interface BenchmarkClient {
 }
 ```
 
+**C#:**
+```csharp
+public interface IBenchmarkClient : IDisposable {
+    void Connect(string host, int port, DriverConfig config);
+    Task<TimedResult<byte[]?>> Get(byte[] key);
+    Task<TimedResult<object?>> Set(byte[] key, byte[] value);
+    Task<TimedResult<string?>> Ping();
+}
+```
+
 **Python:**
 ```python
 class BenchmarkClient(ABC):
@@ -223,6 +233,7 @@ Different languages use appropriate concurrency primitives:
 | Language | Model                                           |
 |----------|-------------------------------------------------|
 | Java     | Virtual Threads (Java 21+) or CompletableFuture |
+| C#       | Task-per-client with async/await (.NET 8+)      |
 | Python   | asyncio with async/await                        |
 | Go       | goroutines and channels                         |
 | Node.js  | Promise/async-await                             |

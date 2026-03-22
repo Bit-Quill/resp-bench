@@ -18,7 +18,7 @@
     "driver_id": {
       "type": "string",
       "description": "Identifier for the client driver implementation",
-      "examples": ["jedis", "lettuce", "valkey-glide", "redisson", "redis-py", "aioredis"]
+      "examples": ["jedis", "lettuce", "valkey-glide", "redisson", "stackexchange-redis", "valkey-glide-csharp", "redis-py", "aioredis"]
     },
     "mode": {
       "type": "string",

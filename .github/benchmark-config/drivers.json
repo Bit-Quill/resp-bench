@@ -13,5 +13,9 @@
     "ruby": [
         "configs/drivers/default/redis-rb.json",
         "configs/drivers/default/valkey-glide-ruby.json"
+    ],
+    "csharp": [
+        "configs/drivers/default/stackexchange-redis.json",
+        "configs/drivers/default/valkey-glide-csharp.json"
     ]
 }

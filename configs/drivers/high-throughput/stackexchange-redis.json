@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "StackExchange.Redis - high throughput configuration",
+    "driver_id": "stackexchange-redis",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

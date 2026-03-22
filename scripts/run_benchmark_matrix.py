@@ -72,6 +72,40 @@ DIM_ENV = "env"
 # Dimensions that map to driver config JSON overrides
 DRIVER_CONFIG_DIMS = {DIM_POOL_SIZE, "use_pooling", "share_native_connection"}
 
+# Map driver_id → engine make target (for multi-engine support)
+DRIVER_ENGINE_MAP = {
+    # Java drivers
+    "jedis": "java",
+    "lettuce": "java",
+    "valkey-glide": "java",
+    "redisson": "java",
+    "spring-data-valkey": "java",
+    "spring-data-redis": "java",
+    # Ruby drivers
+    "redis-rb": "ruby",
+    "valkey-glide-ruby": "ruby",
+    # C# drivers
+    "stackexchange-redis": "csharp",
+    "valkey-glide-csharp": "csharp",
+    # Recording (default to java)
+    "recording": "java",
+}
+
+
+def detect_engine_for_driver(driver_config_path):
+    """Detect the correct engine (make target) for a driver config file.
+
+    Reads the driver_id from the JSON file and maps it to the engine name.
+    Falls back to 'java' if unknown.
+    """
+    try:
+        with open(driver_config_path) as f:
+            config = json.load(f)
+        driver_id = config.get("driver_id", "").lower()
+        return DRIVER_ENGINE_MAP.get(driver_id, "java")
+    except (json.JSONDecodeError, OSError, KeyError):
+        return "java"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Matrix Config Parsing
@@ -498,8 +532,10 @@ def run_matrix(config, output_dir, server_host, port):
                     if env_overrides:
                         bench_env.update({k: str(v) for k, v in env_overrides.items()})
 
+                    # Auto-detect engine from driver config
+                    engine = detect_engine_for_driver(str(driver_path))
                     bench_cmd = [
-                        "make", "java-run",
+                        "make", f"{engine}-run",
                         f"SERVER={server}",
                         f"DRIVER={str(driver_path)}",
                         f"WORKLOAD={str(workload_path)}",

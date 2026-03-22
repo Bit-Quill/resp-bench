@@ -676,6 +676,10 @@ DRIVER_COLORS = {
     "jedis":        "#FB8C00",  # orange 600
     "lettuce":      "#F4511E",  # deep orange 600
     "redisson":     "#8E24AA",  # purple 600
+
+    # C# (.NET) drivers — cyan/pink
+    "stackexchange-redis": "#00ACC1",  # cyan 600
+    "valkey-glide-csharp": "#D81B60",  # pink 600
 }
 
 DRIVER_FAMILIES = {
@@ -688,14 +692,17 @@ DRIVER_FAMILIES = {
     "jedis":                      "low-level",
     "lettuce":                    "low-level",
     "redisson":                   "low-level",
+    "stackexchange-redis":        "csharp",
+    "valkey-glide-csharp":        "csharp",
 }
 
-FAMILY_ORDER = ["spring-data-valkey", "spring-data-redis", "low-level"]
+FAMILY_ORDER = ["spring-data-valkey", "spring-data-redis", "low-level", "csharp"]
 
 FAMILY_LABELS = {
     "spring-data-valkey": "Spring Data Valkey",
     "spring-data-redis":  "Spring Data Redis",
     "low-level":          "Low-Level Java Drivers",
+    "csharp":             "C# (.NET) Drivers",
 }
 
 # Fallback color for unknown drivers
@@ -734,6 +741,8 @@ DRIVER_BASE_COLORS = {
     "jedis":                      (33, 96, 49),
     "lettuce":                    (14, 89, 50),
     "redisson":                   (277, 65, 40),
+    "stackexchange-redis":        (187, 80, 38),  # cyan HSL
+    "valkey-glide-csharp":        (340, 75, 47),  # pink HSL
 }
 
 # Line dash patterns for distinguishing variants
