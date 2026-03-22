@@ -22,6 +22,8 @@ import io.lettuce.core.cluster.RedisClusterClient;
 import io.lettuce.core.cluster.api.StatefulRedisClusterConnection;
 import io.lettuce.core.cluster.api.async.RedisAdvancedClusterAsyncCommands;
 import io.lettuce.core.codec.ByteArrayCodec;
+import io.lettuce.core.resource.ClientResources;
+import io.lettuce.core.resource.DefaultClientResources;
 import io.valkey.javabenchmark.client.AsyncHelper;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.TimedResult;
@@ -31,6 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -120,12 +123,17 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
                 if (sharedClientRef.get() == null) {
                     // First instance — create shared client infrastructure
                     RedisURI redisUri = buildRedisUri(host, port, driverConfig);
+                    ClientResources resources = buildClientResources(driverConfig);
                     
                     if (isClusterMode) {
-                        RedisClusterClient clusterClient = RedisClusterClient.create(redisUri);
+                        RedisClusterClient clusterClient = (resources != null)
+                                ? RedisClusterClient.create(resources, redisUri)
+                                : RedisClusterClient.create(redisUri);
                         sharedClientRef.set(new SharedClient(clusterClient, redisUri));
                     } else {
-                        RedisClient redisClient = RedisClient.create(redisUri);
+                        RedisClient redisClient = (resources != null)
+                                ? RedisClient.create(resources, redisUri)
+                                : RedisClient.create(redisUri);
                         sharedClientRef.set(new SharedClient(redisClient, redisUri));
                     }
                     
@@ -192,6 +200,46 @@ public class LettuceBenchmarkClient implements BenchmarkClient {
         }
         
         return uriBuilder.build();
+    }
+
+    /**
+     * Build custom ClientResources from specific_driver_config if thread pool sizes are specified.
+     *
+     * <p>Supported config keys in {@code specific_driver_config}:</p>
+     * <ul>
+     *   <li>{@code io_thread_pool_size} — number of Netty NIO event loop threads (default: availableProcessors)</li>
+     *   <li>{@code computation_thread_pool_size} — number of computation threads (default: availableProcessors)</li>
+     * </ul>
+     *
+     * @return custom ClientResources, or null to use Lettuce defaults
+     */
+    private static ClientResources buildClientResources(DriverConfig driverConfig) {
+        Map<String, Object> config = driverConfig.getSpecificDriverConfig();
+        if (config == null) return null;
+        
+        Integer ioThreads = getIntConfig(config, "io_thread_pool_size");
+        Integer compThreads = getIntConfig(config, "computation_thread_pool_size");
+        
+        if (ioThreads == null && compThreads == null) return null;
+        
+        DefaultClientResources.Builder builder = DefaultClientResources.builder();
+        
+        if (ioThreads != null) {
+            builder.ioThreadPoolSize(ioThreads);
+            logger.info("Lettuce ioThreadPoolSize={}", ioThreads);
+        }
+        if (compThreads != null) {
+            builder.computationThreadPoolSize(compThreads);
+            logger.info("Lettuce computationThreadPoolSize={}", compThreads);
+        }
+        
+        return builder.build();
+    }
+
+    private static Integer getIntConfig(Map<String, Object> config, String key) {
+        Object value = config.get(key);
+        if (value == null) return null;
+        return value instanceof Number ? ((Number) value).intValue() : Integer.parseInt(value.toString());
     }
 
     @Override
