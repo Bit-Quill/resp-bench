@@ -17,79 +17,66 @@ package io.valkey.javabenchmark.client;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
- * Common async execution helper for all benchmark clients.
+ * Synchronous timing helper for all benchmark clients.
  *
- * <p>Provides a unified execution pattern using virtual threads (Java 21+).
- * All driver operations are wrapped in virtual threads with consistent timing,
- * ensuring fair comparison across synchronous and asynchronous drivers.</p>
+ * <p>Provides a unified timing pattern for driver operations. Each operation is
+ * executed <b>inline on the calling thread</b> (which is already a long-lived
+ * virtual thread owned by {@link io.valkey.javabenchmark.engine.BenchmarkEngine}),
+ * timed with {@code System.nanoTime()}, and wrapped in an already-completed
+ * {@link CompletableFuture} for interface compatibility.</p>
  *
- * <p>For async drivers (glide, lettuce, redisson), the underlying async call
- * is made and then {@code .get()} blocks the virtual thread (NOT an OS thread)
- * until the response arrives. This approach:</p>
- * <ul>
- *   <li>Avoids pinning completion work to library-internal thread pools</li>
- *   <li>Gives the JVM full control over scheduling via virtual thread scheduler</li>
- *   <li>Matches the pattern a real Java 21 application would use</li>
- *   <li>Ensures all drivers are measured with the same execution model</li>
- * </ul>
+ * <h3>Why synchronous?</h3>
+ * <p>The engine's VT-per-client architecture already provides one virtual thread
+ * per client connection. Spawning an additional per-request VT (as the previous
+ * implementation did via {@code CompletableFuture.supplyAsync(..., VIRTUAL_EXECUTOR)})
+ * was redundant and created ~500K+ unnecessary VT creations/sec, adding significant
+ * ForkJoinPool scheduling overhead without any benefit.</p>
  *
  * @author Ilia Kolominsky
  */
 public class AsyncHelper {
 
-    private static final ExecutorService VIRTUAL_EXECUTOR =
-            Executors.newVirtualThreadPerTaskExecutor();
-
     /**
-     * Execute a blocking operation on a virtual thread with timing.
+     * Execute a blocking operation synchronously with timing.
+     *
+     * <p>The operation runs on the calling thread (a long-lived virtual thread)
+     * and returns an already-completed future with the timed result.</p>
      *
      * @param operation the operation to execute (may block, e.g., {@code client.set().get()})
      * @param <T>       the result type
-     * @return a future that completes with the timed result
+     * @return a completed future with the timed result
      */
     public static <T> CompletableFuture<TimedResult<T>> timed(Callable<T> operation) {
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            try {
-                T result = operation.call();
-                long latencyMicros = (System.nanoTime() - start) / 1000;
-                return TimedResult.of(result, latencyMicros);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }, VIRTUAL_EXECUTOR);
+        long start = System.nanoTime();
+        try {
+            T result = operation.call();
+            long latencyMicros = (System.nanoTime() - start) / 1000;
+            return CompletableFuture.completedFuture(TimedResult.of(result, latencyMicros));
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(new RuntimeException(e));
+        }
     }
 
     /**
-     * Execute a void blocking operation on a virtual thread with timing.
+     * Execute a void blocking operation synchronously with timing.
+     *
+     * <p>The operation runs on the calling thread (a long-lived virtual thread)
+     * and returns an already-completed future with the timed result.</p>
      *
      * @param operation the void operation to execute
-     * @return a future that completes with the timed result (no value)
+     * @return a completed future with the timed result (no value)
      */
     public static CompletableFuture<TimedResult<Void>> timedVoid(ThrowingRunnable operation) {
-        return CompletableFuture.supplyAsync(() -> {
-            long start = System.nanoTime();
-            try {
-                operation.run();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
+        long start = System.nanoTime();
+        try {
+            operation.run();
             long latencyMicros = (System.nanoTime() - start) / 1000;
-            return TimedResult.ofVoid(latencyMicros);
-        }, VIRTUAL_EXECUTOR);
-    }
-
-    /**
-     * Get the shared virtual thread executor for use in clients that need it directly.
-     *
-     * @return the shared virtual thread executor
-     */
-    public static ExecutorService executor() {
-        return VIRTUAL_EXECUTOR;
+            return CompletableFuture.completedFuture(TimedResult.ofVoid(latencyMicros));
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(new RuntimeException(e));
+        }
     }
 
     /**

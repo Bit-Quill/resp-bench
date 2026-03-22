@@ -47,6 +47,9 @@ public class DriverConfig {
     @JsonProperty("tls")
     private TlsConfig tls;
 
+    @JsonProperty("command_timeout_ms")
+    private Integer commandTimeoutMs;
+
     @JsonProperty("specific_driver_config")
     private Map<String, Object> specificDriverConfig;
 
@@ -106,6 +109,14 @@ public class DriverConfig {
 
     public void setSpecificDriverConfig(Map<String, Object> specificDriverConfig) {
         this.specificDriverConfig = specificDriverConfig;
+    }
+
+    public Integer getCommandTimeoutMs() {
+        return commandTimeoutMs;
+    }
+
+    public void setCommandTimeoutMs(Integer commandTimeoutMs) {
+        this.commandTimeoutMs = commandTimeoutMs;
     }
 
     // Convenience methods

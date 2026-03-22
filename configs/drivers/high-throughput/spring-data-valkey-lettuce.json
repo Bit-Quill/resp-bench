@@ -8,5 +8,6 @@
         "use_pooling": true,
         "pool_size": 8,
         "share_native_connection": false
-    }
+    },
+    "command_timeout_ms": 10000
 }

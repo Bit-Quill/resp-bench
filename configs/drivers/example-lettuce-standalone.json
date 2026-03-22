@@ -1,7 +1,11 @@
 {
     "schema_version": "1.0",
-    "description": "Lettuce client - standalone mode",
+    "description": "Lettuce client - standalone mode with optional Netty thread tuning",
     "driver_id": "lettuce",
     "mode": "standalone",
-    "specific_driver_config": {}
+    "command_timeout_ms": 10000,
+    "specific_driver_config": {
+        "io_thread_pool_size": 16,
+        "computation_thread_pool_size": 16
+    }
 }

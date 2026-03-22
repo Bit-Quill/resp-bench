@@ -3,5 +3,6 @@
     "description": "redis-rb client - high-throughput configuration",
     "driver_id": "redis-rb",
     "mode": "standalone",
-    "specific_driver_config": {}
+    "specific_driver_config": {},
+    "command_timeout_ms": 10000
 }

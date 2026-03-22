@@ -3,5 +3,6 @@
     "description": "lettuce client - high-throughput configuration",
     "driver_id": "lettuce",
     "mode": "standalone",
-    "specific_driver_config": {}
+    "specific_driver_config": {},
+    "command_timeout_ms": 10000
 }

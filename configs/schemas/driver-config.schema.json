@@ -25,6 +25,11 @@
       "description": "Server topology mode",
       "enum": ["standalone", "cluster", "sentinel"]
     },
+    "command_timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Command timeout in milliseconds. Applied to all drivers that support it."
+    },
     "tls": {
       "type": "object",
       "description": "TLS/SSL configuration",
@@ -67,15 +72,21 @@
     },
     "specific_driver_config": {
       "type": "object",
-      "description": "Driver-specific configuration options",
-      "properties": {
-        "secondary_driver_id": {
-          "type": "string",
-          "description": "For framework drivers (e.g., Spring Data), specifies the underlying client driver"
-        }
-      },
+      "description": "Driver-specific configuration options. Valid keys depend on the driver_id. See per-driver schemas in configs/schemas/specific-driver-configs/.",
       "additionalProperties": true
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "driver_id": { "const": "lettuce" } }
+      },
+      "then": {
+        "properties": {
+          "specific_driver_config": { "$ref": "specific-driver-configs/lettuce.schema.json" }
+        }
+      }
+    }
+  ],
   "additionalProperties": false
 }

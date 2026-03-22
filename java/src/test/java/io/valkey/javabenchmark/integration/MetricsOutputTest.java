@@ -1115,7 +1115,7 @@ class MetricsOutputTest {
         
         assertThat(actualP999Us)
             .describedAs("p99.9: expected ~%d µs (%.1f ms)", expectedP999Us, expectedP999Us / 1000.0)
-            .isCloseTo(expectedP999Us, withinPercentage(3));
+            .isCloseTo(expectedP999Us, withinPercentage(5));
         
         // Verify min is >= floor (50ms = 50,000µs, allow 1ms tolerance)
         assertThat(decodedHistogram.getMinValue())

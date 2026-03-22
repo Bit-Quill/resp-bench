@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/resp-bench/schemas/specific-driver-configs/lettuce.schema.json",
+  "title": "Lettuce Driver Configuration",
+  "description": "Lettuce-specific configuration options for specific_driver_config",
+  "type": "object",
+  "properties": {
+    "io_thread_pool_size": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of Netty NIO event loop threads for network I/O. Default: Runtime.availableProcessors(). On high-CPU machines (e.g., 96 vCPUs), reducing this to 16-32 can significantly reduce scheduling contention."
+    },
+    "computation_thread_pool_size": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of computation/reactor threads for reactive operations and completions. Default: Runtime.availableProcessors()."
+    }
+  },
+  "additionalProperties": false
+}

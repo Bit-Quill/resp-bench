@@ -6,5 +6,6 @@
     "specific_driver_config": {
         "secondary_driver_id": "valkey-glide",
         "pool_size": 8
-    }
+    },
+    "command_timeout_ms": 10000
 }

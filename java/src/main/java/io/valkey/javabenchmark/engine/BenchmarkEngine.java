@@ -6,6 +6,7 @@ package io.valkey.javabenchmark.engine;
 import io.valkey.javabenchmark.client.BenchmarkClient;
 import io.valkey.javabenchmark.client.BenchmarkClientFactory;
 import io.valkey.javabenchmark.command.Command;
+import io.valkey.javabenchmark.command.Command.CommandResult;
 import io.valkey.javabenchmark.command.CommandFactory;
 import io.valkey.javabenchmark.config.*;
 import io.valkey.javabenchmark.metrics.NdjsonMetricsWriter;
@@ -21,22 +22,34 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Main benchmark engine that orchestrates the benchmark execution.
  * 
- * <p>Uses a backpressure-aware design where each client connection tracks
- * its in-flight requests. New requests are only submitted when a client
- * has available capacity (controlled by pipeline depth).</p>
+ * <p>Uses a <b>virtual-thread-per-client</b> architecture where each client connection
+ * is owned by a long-lived virtual thread that runs a tight request loop. This design
+ * eliminates the overhead of per-request VT creation and scheduling that limited the
+ * previous architecture to ~400K RPS.</p>
  * 
- * <p>Command generation is parallelized across multiple "command issuer" threads
- * to avoid a single-threaded bottleneck at high connection counts. Each issuer
- * thread manages a partition of the client connections with its own semaphore,
- * key generator, and command selector to minimize cross-thread contention.</p>
+ * <h3>Architecture</h3>
+ * <pre>
+ *   Main thread
+ *     │
+ *     ├── Creates N client connections
+ *     ├── Spawns N long-lived virtual threads (one per client)
+ *     │     │
+ *     │     ├── VT-0: while(running) { execute → join → record → repeat }
+ *     │     ├── VT-1: while(running) { execute → join → record → repeat }
+ *     │     ├── ...
+ *     │     └── VT-N: while(running) { execute → join → record → repeat }
+ *     │
+ *     ├── Logs progress periodically
+ *     └── Waits for all VTs to complete, merges metrics
+ * </pre>
  * 
- * <p>This design ensures:</p>
+ * <p>Key advantages over the previous command-issuer + semaphore design:</p>
  * <ul>
- *   <li>Bounded memory usage - max in-flight requests = connections × pipeline_depth</li>
- *   <li>Accurate latency measurement - no queue backlog inflation</li>
- *   <li>Natural backpressure - new requests wait for available slots</li>
- *   <li>Correct behavior for both duration-based and request-based workloads</li>
- *   <li>Linear scaling of command generation throughput with issuer threads</li>
+ *   <li><b>No per-request VT creation</b> — eliminates 400K+ VT spawns/sec overhead</li>
+ *   <li><b>No semaphore contention</b> — backpressure is implicit (VT blocks on I/O)</li>
+ *   <li><b>No CompletableFuture chains</b> — direct join() parks VT, not carrier</li>
+ *   <li><b>Fewer carrier threads needed</b> — VTs park on I/O, carriers are free</li>
+ *   <li><b>Per-VT state</b> — KeyGenerator, CommandSelector are thread-local, zero contention</li>
  * </ul>
  *
  * @author Ilia Kolominsky
@@ -49,9 +62,6 @@ public class BenchmarkEngine {
     
     /** Progress logging interval in seconds */
     private static final int PROGRESS_LOG_INTERVAL_SECONDS = 10;
-    
-    /** Default divisor for auto-computing command issuer threads from connection count */
-    private static final int CONNECTIONS_PER_ISSUER_THREAD = 32;
 
     private final String host;
     private final int port;
@@ -59,7 +69,6 @@ public class BenchmarkEngine {
     private final WorkloadConfig workloadConfig;
     private final NdjsonMetricsWriter metricsWriter;
     private final String commitId;
-    private final Integer commandIssuerThreadsOverride;
     
     // Client reference for version info
     private BenchmarkClient sampleClient;
@@ -83,7 +92,6 @@ public class BenchmarkEngine {
         this.workloadConfig = workloadConfig;
         this.metricsWriter = new NdjsonMetricsWriter(metricsPath);
         this.commitId = commitId;
-        this.commandIssuerThreadsOverride = commandIssuerThreads;
     }
 
     public void run() throws Exception {
@@ -106,7 +114,6 @@ public class BenchmarkEngine {
      */
     private void setupMetadata() {
         try {
-            // Create a temporary client to get version info
             sampleClient = BenchmarkClientFactory.createAndConnect(host, port, driverConfig);
             
             String driverId = driverConfig.getDriverId();
@@ -119,12 +126,10 @@ public class BenchmarkEngine {
             logger.info("Metadata: commit={}, driver={}, version={}", 
                         commitId != null ? commitId : "N/A", driverId, primaryVersion);
             
-            // Close the sample client
             sampleClient.close();
             sampleClient = null;
         } catch (Exception e) {
             logger.warn("Failed to get driver version for metadata: {}", e.getMessage());
-            // Still set basic metadata
             metricsWriter.setMetadata(commitId, driverConfig.getDriverId(), "unknown", 
                                      driverConfig.getSecondaryDriverId(), null);
         }
@@ -133,16 +138,15 @@ public class BenchmarkEngine {
     private void executePhase(PhaseConfig phase) throws Exception {
         logger.info("=== Starting phase: {} ({}) ===", phase.getId(), phase.getDescription());
 
-        // Get pipeline depth from phase config (default 1 for accurate latency)
         int pipelineDepth = phase.getPipelineDepth() > 0 ? phase.getPipelineDepth() : DEFAULT_PIPELINE_DEPTH;
         
-        // Create client slots with backpressure control
-        List<ClientSlot> clientSlots = createClientSlots(phase, pipelineDepth);
+        // Create client connections
+        List<BenchmarkClient> clients = createClients(phase);
         
         // Create commands
         List<Command> commands = CommandFactory.createAll(phase.getCommands());
         
-        // Create key generator
+        // Create key generator (base — each VT will fork its own)
         KeyGenerator keyGenerator = KeyGenerator.create(phase.getKeyspace());
         
         // Create rate limiter
@@ -152,22 +156,26 @@ public class BenchmarkEngine {
         // Create metrics collector
         MetricsCollector metrics = new MetricsCollector();
 
-        // Execute workload with backpressure (including warmup)
-        String status = executeWorkload(phase, clientSlots, commands, keyGenerator, rateLimiter, metrics);
+        // Warmup: send PINGs on all clients (blocking, before measured workload)
+        warmupClients(clients, phase.getWarmupRequests());
+
+        // Execute workload with VT-per-client architecture
+        String status = executeWorkload(phase, clients, commands, keyGenerator, 
+                                         rateLimiter, metrics, pipelineDepth);
 
         // Write metrics
         metricsWriter.writePhaseResults(phase.getId(), status, phase.getConnections(), metrics);
 
         // Close clients
-        closeClientSlots(clientSlots);
+        closeClients(clients);
 
         logger.info("=== Phase {} completed: {} ===", phase.getId(), status);
     }
 
-    private List<ClientSlot> createClientSlots(PhaseConfig phase, int pipelineDepth) throws Exception {
-        logger.info("Creating {} connections (pipeline depth: {})...", phase.getConnections(), pipelineDepth);
+    private List<BenchmarkClient> createClients(PhaseConfig phase) throws Exception {
+        logger.info("Creating {} connections...", phase.getConnections());
         
-        List<ClientSlot> slots = new ArrayList<>();
+        List<BenchmarkClient> clients = new ArrayList<>();
         RateLimiter cpsLimiter = phase.hasCpsLimit() ? 
                 RateLimiter.create(phase.getCpsLimit()) : null;
 
@@ -177,87 +185,148 @@ public class BenchmarkEngine {
             }
             
             BenchmarkClient client = BenchmarkClientFactory.createAndConnect(host, port, driverConfig);
-            slots.add(new ClientSlot(client, pipelineDepth));
+            clients.add(client);
             
             if ((i + 1) % 50 == 0) {
                 logger.info("Created {}/{} connections", i + 1, phase.getConnections());
             }
         }
         
-        logger.info("All {} connections established", slots.size());
-        return slots;
+        logger.info("All {} connections established", clients.size());
+        return clients;
     }
 
     /**
-     * Compute the effective number of command issuer threads.
+     * Warmup: send PINGs on all clients to verify connections are alive.
      * 
-     * <p>Priority: CLI override > auto-detect based on connection count.</p>
-     * <p>Auto-detect: max(1, connections / 32), capped at available processors.</p>
+     * @throws Exception if any warmup PING fails (phase should be aborted)
      */
-    private int computeIssuerThreadCount(int connections) {
-        if (commandIssuerThreadsOverride != null && commandIssuerThreadsOverride > 0) {
-            return commandIssuerThreadsOverride;
+    private void warmupClients(List<BenchmarkClient> clients, int warmupRequestsPerClient) 
+            throws Exception {
+        if (warmupRequestsPerClient <= 0) return;
+        
+        logger.info("Warming up {} clients with {} PING(s) each...", 
+                    clients.size(), warmupRequestsPerClient);
+        
+        // Enable warmup mode so clients (e.g., RecordingBenchmarkClient) suppress error simulation
+        for (BenchmarkClient client : clients) {
+            client.setWarmupMode(true);
         }
-        int auto = Math.max(1, connections / CONNECTIONS_PER_ISSUER_THREAD);
-        return Math.min(auto, Runtime.getRuntime().availableProcessors());
+        
+        try {
+            // Use VTs for parallel warmup
+            try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                List<Future<?>> futures = new ArrayList<>();
+                for (BenchmarkClient client : clients) {
+                    futures.add(executor.submit(() -> {
+                        for (int r = 0; r < warmupRequestsPerClient; r++) {
+                            client.ping().join(); // Let exceptions propagate
+                        }
+                    }));
+                }
+                // Wait for all warmup tasks — propagate any failure
+                for (Future<?> f : futures) {
+                    f.get(30, TimeUnit.SECONDS);
+                }
+            }
+        } finally {
+            // Disable warmup mode — error simulation resumes for the actual workload
+            for (BenchmarkClient client : clients) {
+                client.setWarmupMode(false);
+            }
+        }
+        
+        logger.info("Warmup completed");
     }
 
-    private String executeWorkload(PhaseConfig phase, List<ClientSlot> clientSlots,
+    private String executeWorkload(PhaseConfig phase, List<BenchmarkClient> clients,
                                    List<Command> commands, KeyGenerator keyGenerator,
-                                   RateLimiter rateLimiter, MetricsCollector metrics) {
+                                   RateLimiter rateLimiter, MetricsCollector metrics,
+                                   int pipelineDepth) {
         
         CompletionConfig completion = phase.getCompletion();
         AtomicBoolean running = new AtomicBoolean(true);
         AtomicLong requestCount = new AtomicLong(0);
-        AtomicLong pendingCount = new AtomicLong(0);
         
-        int issuerThreadCount = computeIssuerThreadCount(clientSlots.size());
-        logger.info("Using {} command issuer thread(s) for {} connections", 
-                    issuerThreadCount, clientSlots.size());
+        int workerCount = clients.size();
+        logger.info("Spawning {} worker virtual threads (pipeline_depth={})", 
+                    workerCount, pipelineDepth);
         
-        // Submit warmup requests BEFORE starting metrics
-        int warmupRequests = phase.getWarmupRequests();
-        if (warmupRequests > 0) {
-            // Use a single global semaphore for warmup (simple, small number of requests)
-            int totalSlots = clientSlots.stream().mapToInt(s -> s.pipelineDepth).sum();
-            Semaphore warmupGlobalSlots = new Semaphore(totalSlots);
-            submitWarmup(clientSlots, warmupRequests, warmupGlobalSlots);
-        }
+        // Compute per-worker request budget for request-based completion
+        long totalTargetRequests = completion.isRequestBased() ? completion.getTotalRequests() : -1;
+        
+        // Duration end time
+        long endTimeMs = completion.isDurationBased() 
+                ? System.currentTimeMillis() + (completion.getDurationSeconds() * 1000)
+                : Long.MAX_VALUE;
         
         metrics.start();
-        
-        // Progress logging state
         long startTime = System.currentTimeMillis();
         
-        try {
-            if (issuerThreadCount == 1) {
-                // Single-threaded path (optimized: no partitioning overhead)
-                executeSingleThreaded(phase, clientSlots, commands, keyGenerator, rateLimiter,
-                                      metrics, requestCount, pendingCount, running, startTime);
-            } else {
-                // Multi-threaded path with partitioned command issuers
-                executeMultiThreaded(phase, clientSlots, commands, keyGenerator, rateLimiter,
-                                      metrics, requestCount, pendingCount, running, startTime,
-                                      issuerThreadCount);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<?>> workerFutures = new ArrayList<>(workerCount);
+            
+            for (int i = 0; i < workerCount; i++) {
+                final int workerIndex = i;
+                final BenchmarkClient client = clients.get(i);
+                final KeyGenerator workerKeyGen = keyGenerator.forkForThread(workerIndex);
+                final CommandSelector workerSelector = new CommandSelector(commands);
+                
+                workerFutures.add(executor.submit(() -> {
+                    Thread.currentThread().setName("worker-" + workerIndex);
+                    
+                    try {
+                        if (pipelineDepth <= 1) {
+                            runSyncLoop(client, workerSelector, workerKeyGen, rateLimiter,
+                                       metrics, requestCount, running, totalTargetRequests, endTimeMs);
+                        } else {
+                            runPipelinedLoop(client, workerSelector, workerKeyGen, rateLimiter,
+                                            metrics, requestCount, running, totalTargetRequests, 
+                                            endTimeMs, pipelineDepth);
+                        }
+                    } catch (Exception e) {
+                        // Signal all workers to stop — fail-fast on unexpected errors
+                        running.set(false);
+                        if (e instanceof RuntimeException re) throw re;
+                        throw new RuntimeException(e); // Wrap checked exceptions for Future.get()
+                    }
+                }));
             }
             
-            // Wait for remaining in-flight requests to complete
-            long remaining = pendingCount.get();
-            if (remaining > 0) {
-                logger.info("Waiting for {} pending operations to complete...", remaining);
-                long waitStart = System.currentTimeMillis();
-                long maxWaitMs = 60_000; // 60 second timeout
-                
-                while (pendingCount.get() > 0 && (System.currentTimeMillis() - waitStart) < maxWaitMs) {
-                    Thread.sleep(10);
+            // Progress logging from main thread while workers run
+            long lastLogTime = System.currentTimeMillis();
+            boolean allDone = false;
+            
+            while (!allDone) {
+                allDone = true;
+                for (Future<?> f : workerFutures) {
+                    if (!f.isDone()) {
+                        allDone = false;
+                        break;
+                    }
                 }
-                
-                if (pendingCount.get() > 0) {
-                    logger.warn("Timeout waiting for {} operations", pendingCount.get());
-                    return "TIMEOUT";
+                if (!allDone) {
+                    Thread.sleep(100);
+                    lastLogTime = logProgressIfNeeded(requestCount.get(), totalTargetRequests, 
+                                                      lastLogTime, startTime);
                 }
             }
-            logger.info("All operations completed");
+            
+            // Check for worker failures — any exception means the phase failed
+            boolean hasWorkerFailures = false;
+            for (Future<?> f : workerFutures) {
+                try {
+                    f.get();
+                } catch (ExecutionException e) {
+                    logger.error("Worker failed: {}", e.getCause().getMessage());
+                    hasWorkerFailures = true;
+                }
+            }
+            
+            if (hasWorkerFailures) {
+                logger.error("Phase failed: one or more workers crashed");
+                return "ERROR";
+            }
             
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -270,286 +339,152 @@ public class BenchmarkEngine {
             metrics.stop();
         }
         
+        logger.info("All operations completed. Total requests: {}", requestCount.get());
         return "COMPLETED";
     }
 
     /**
-     * Single-threaded command issuer (original behavior, no partitioning overhead).
+     * Synchronous request loop for pipeline_depth=1.
+     * 
+     * <p>Each VT owns one client and runs: execute → join → record → repeat.
+     * The join() parks the VT (not the carrier), so the carrier is free to
+     * run other VTs while waiting for the server response.</p>
      */
-    private void executeSingleThreaded(PhaseConfig phase, List<ClientSlot> clientSlots,
-                                        List<Command> commands, KeyGenerator keyGenerator,
-                                        RateLimiter rateLimiter, MetricsCollector metrics,
-                                        AtomicLong requestCount, AtomicLong pendingCount,
-                                        AtomicBoolean running, long startTime) 
+    private void runSyncLoop(BenchmarkClient client, CommandSelector selector,
+                              KeyGenerator keyGen, RateLimiter rateLimiter,
+                              MetricsCollector metrics, AtomicLong requestCount,
+                              AtomicBoolean running, long totalTargetRequests, long endTimeMs) 
             throws InterruptedException {
         
-        Thread.currentThread().setName("command-issuer");
-        
-        CompletionConfig completion = phase.getCompletion();
-        CommandSelector selector = new CommandSelector(commands);
-        int totalSlots = clientSlots.stream().mapToInt(s -> s.pipelineDepth).sum();
-        Semaphore globalSlots = new Semaphore(totalSlots);
-        long lastLogTime = System.currentTimeMillis();
-        
-        if (completion.isDurationBased()) {
-            long endTime = System.currentTimeMillis() + (completion.getDurationSeconds() * 1000);
-            
-            while (System.currentTimeMillis() < endTime && running.get()) {
-                submitRequestWithBackpressure(clientSlots, selector, keyGenerator, rateLimiter, 
-                                               metrics, requestCount, pendingCount, globalSlots, -1);
-                lastLogTime = logProgressIfNeeded(requestCount.get(), -1, lastLogTime, startTime);
-            }
-        } else {
-            long targetRequests = completion.getTotalRequests();
-            
-            while (running.get()) {
-                boolean submitted = submitRequestWithBackpressure(clientSlots, selector, keyGenerator, rateLimiter, 
-                                               metrics, requestCount, pendingCount, globalSlots, targetRequests);
-                if (!submitted) break;
-                lastLogTime = logProgressIfNeeded(requestCount.get(), targetRequests, lastLogTime, startTime);
-            }
-        }
-    }
-
-    /**
-     * Multi-threaded command issuer with partitioned client slots.
-     * 
-     * <p>Partitions the client slots among N issuer threads. Each thread gets:</p>
-     * <ul>
-     *   <li>Its own subset of ClientSlots</li>
-     *   <li>Its own Semaphore (permits = sum of pipeline depths in partition)</li>
-     *   <li>Its own KeyGenerator (forked with unique seed per thread)</li>
-     *   <li>Its own CommandSelector (independent Random)</li>
-     * </ul>
-     * 
-     * <p>Shared across all threads (already thread-safe):</p>
-     * <ul>
-     *   <li>AtomicLong requestCount — for total tracking and request-based completion</li>
-     *   <li>AtomicLong pendingCount — for drain tracking</li>
-     *   <li>MetricsCollector — uses SynchronizedHistogram and ConcurrentHashMap</li>
-     *   <li>RateLimiter — uses Semaphore internally</li>
-     * </ul>
-     */
-    private void executeMultiThreaded(PhaseConfig phase, List<ClientSlot> clientSlots,
-                                       List<Command> commands, KeyGenerator keyGenerator,
-                                       RateLimiter rateLimiter, MetricsCollector metrics,
-                                       AtomicLong requestCount, AtomicLong pendingCount,
-                                       AtomicBoolean running, long startTime,
-                                       int issuerThreadCount) throws Exception {
-        
-        CompletionConfig completion = phase.getCompletion();
-        
-        // Partition client slots into roughly equal groups
-        List<List<ClientSlot>> partitions = partitionList(clientSlots, issuerThreadCount);
-        
-        ExecutorService issuerPool = Executors.newFixedThreadPool(issuerThreadCount, new ThreadFactory() {
-            private int counter = 0;
-            @Override
-            public Thread newThread(Runnable r) {
-                Thread t = new Thread(r, "command-issuer-" + counter++);
-                t.setDaemon(true);
-                return t;
-            }
-        });
-        
-        List<Future<?>> futures = new ArrayList<>();
-        
-        for (int i = 0; i < partitions.size(); i++) {
-            final int threadIndex = i;
-            final List<ClientSlot> partition = partitions.get(i);
-            
-            if (partition.isEmpty()) {
-                continue; // Skip empty partitions (more threads than clients)
-            }
-            
-            // Each thread gets its own key generator, command selector, and semaphore
-            final KeyGenerator threadKeyGen = keyGenerator.forkForThread(threadIndex);
-            final CommandSelector threadSelector = new CommandSelector(commands);
-            final int partitionSlots = partition.stream().mapToInt(s -> s.pipelineDepth).sum();
-            final Semaphore partitionSemaphore = new Semaphore(partitionSlots);
-            
-            futures.add(issuerPool.submit(() -> {
-                Thread.currentThread().setName("command-issuer-" + threadIndex);
-                long lastLogTime = System.currentTimeMillis();
-                
-                try {
-                    if (completion.isDurationBased()) {
-                        long endTime = System.currentTimeMillis() + (completion.getDurationSeconds() * 1000);
-                        
-                        while (System.currentTimeMillis() < endTime && running.get()) {
-                            submitRequestWithBackpressure(partition, threadSelector, threadKeyGen, 
-                                                           rateLimiter, metrics, requestCount, 
-                                                           pendingCount, partitionSemaphore, -1);
-                        }
-                    } else {
-                        long targetRequests = completion.getTotalRequests();
-                        
-                        while (running.get()) {
-                            boolean submitted = submitRequestWithBackpressure(partition, threadSelector, threadKeyGen, 
-                                                           rateLimiter, metrics, requestCount, 
-                                                           pendingCount, partitionSemaphore, targetRequests);
-                            if (!submitted) break;
-                        }
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    logger.error("Error in command-issuer-{}: {}", threadIndex, e.getMessage());
-                    running.set(false);
-                }
-            }));
-        }
-        
-        // Progress logging from main thread while issuers run
-        CompletionConfig comp = phase.getCompletion();
-        long lastLogTime = System.currentTimeMillis();
-        boolean allDone = false;
-        
-        while (!allDone) {
-            allDone = true;
-            for (Future<?> f : futures) {
-                if (!f.isDone()) {
-                    allDone = false;
+        while (running.get()) {
+            // Check termination conditions
+            if (System.currentTimeMillis() >= endTimeMs) break;
+            if (totalTargetRequests > 0) {
+                long claimed = requestCount.getAndIncrement();
+                if (claimed >= totalTargetRequests) {
+                    requestCount.decrementAndGet();
                     break;
                 }
             }
-            if (!allDone) {
-                Thread.sleep(100);
-                long target = comp.isDurationBased() ? -1 : comp.getTotalRequests();
-                lastLogTime = logProgressIfNeeded(requestCount.get(), target, lastLogTime, startTime);
+            
+            // Rate limiting (parks VT, not carrier)
+            if (rateLimiter != null) {
+                rateLimiter.acquire();
+            }
+            
+            // Select and execute command
+            Command command = selector.select();
+            try {
+                CommandResult result = command.execute(client, keyGen).join();
+                metrics.record(result);
+            } catch (CompletionException e) {
+                // Command execution failed
+                metrics.record(CommandResult.failure(command.getName(), e.getMessage()));
+            }
+            
+            // For duration-based: count here (after execution)
+            if (totalTargetRequests <= 0) {
+                requestCount.incrementAndGet();
             }
         }
-        
-        // Check for exceptions
-        for (Future<?> f : futures) {
-            f.get(); // Propagates exceptions
-        }
-        
-        issuerPool.shutdown();
-        issuerPool.awaitTermination(5, TimeUnit.SECONDS);
     }
 
     /**
-     * Partition a list into N roughly equal sublists.
-     */
-    private <T> List<List<T>> partitionList(List<T> list, int partitions) {
-        List<List<T>> result = new ArrayList<>(partitions);
-        int size = list.size();
-        int baseSize = size / partitions;
-        int remainder = size % partitions;
-        
-        int offset = 0;
-        for (int i = 0; i < partitions; i++) {
-            int partSize = baseSize + (i < remainder ? 1 : 0);
-            result.add(list.subList(offset, offset + partSize));
-            offset += partSize;
-        }
-        return result;
-    }
-
-    /**
-     * Submit a single request with backpressure control.
+     * Pipelined request loop for pipeline_depth > 1.
      * 
-     * <p>For request-based completion, atomically claims a request slot BEFORE any
-     * blocking operations (semaphore acquire, rate limiting). This eliminates the
-     * race condition where multiple threads pass the loop check simultaneously and
-     * over-submit past the target count.</p>
-     *
-     * @param targetRequests the target request count for request-based completion,
-     *                       or {@code <= 0} for duration-based (unlimited)
-     * @return {@code true} if a request was submitted, {@code false} if the target
-     *         was already reached (request-based only)
+     * <p>Each VT owns one client and maintains up to pipeline_depth in-flight requests.
+     * Uses CompletableFuture.anyOf() to wait for the next completion, then immediately
+     * issues a new request to keep the pipeline full.</p>
      */
-    private boolean submitRequestWithBackpressure(List<ClientSlot> clientSlots, CommandSelector selector,
-                                                KeyGenerator keyGenerator, RateLimiter rateLimiter,
-                                                MetricsCollector metrics, AtomicLong requestCount,
-                                                AtomicLong pendingCount, Semaphore globalSlots,
-                                                long targetRequests) 
+    private void runPipelinedLoop(BenchmarkClient client, CommandSelector selector,
+                                   KeyGenerator keyGen, RateLimiter rateLimiter,
+                                   MetricsCollector metrics, AtomicLong requestCount,
+                                   AtomicBoolean running, long totalTargetRequests,
+                                   long endTimeMs, int pipelineDepth)
             throws InterruptedException {
         
-        // 0. For request-based completion: atomically claim a slot BEFORE blocking.
-        //    This prevents over-submission when multiple threads race past the loop check.
-        if (targetRequests > 0) {
-            long claimed = requestCount.getAndIncrement();
-            if (claimed >= targetRequests) {
-                requestCount.decrementAndGet(); // Unclaim
-                return false; // Target reached
+        // Track pending futures with their command names for error reporting
+        List<CompletableFuture<CommandResult>> pending = new ArrayList<>(pipelineDepth);
+        
+        // Fill the pipeline initially
+        for (int i = 0; i < pipelineDepth && running.get(); i++) {
+            if (!claimAndSubmit(client, selector, keyGen, rateLimiter, requestCount,
+                               totalTargetRequests, endTimeMs, pending)) {
+                break;
             }
         }
         
-        // 1. Apply rate limiting (if configured)
+        // Event loop: wait for completion, record, refill
+        while (!pending.isEmpty() && running.get()) {
+            // Wait for any future to complete
+            try {
+                CompletableFuture.anyOf(pending.toArray(new CompletableFuture[0])).join();
+            } catch (CompletionException e) {
+                // At least one failed — we'll handle it below
+            }
+            
+            // Process all completed futures
+            Iterator<CompletableFuture<CommandResult>> it = pending.iterator();
+            while (it.hasNext()) {
+                CompletableFuture<CommandResult> f = it.next();
+                if (f.isDone()) {
+                    it.remove();
+                    try {
+                        CommandResult result = f.join();
+                        metrics.record(result);
+                    } catch (CompletionException e) {
+                        metrics.record(CommandResult.failure("UNKNOWN", e.getMessage()));
+                    }
+                    
+                    // For duration-based: count completions
+                    if (totalTargetRequests <= 0) {
+                        requestCount.incrementAndGet();
+                    }
+                    
+                    // Refill the pipeline slot
+                    if (running.get()) {
+                        claimAndSubmit(client, selector, keyGen, rateLimiter, requestCount,
+                                      totalTargetRequests, endTimeMs, pending);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Claim a request slot (for request-based) and submit a new request.
+     * Returns false if the phase should end.
+     */
+    private boolean claimAndSubmit(BenchmarkClient client, CommandSelector selector,
+                                    KeyGenerator keyGen, RateLimiter rateLimiter,
+                                    AtomicLong requestCount, long totalTargetRequests,
+                                    long endTimeMs, List<CompletableFuture<CommandResult>> pending)
+            throws InterruptedException {
+        
+        if (System.currentTimeMillis() >= endTimeMs) return false;
+        
+        if (totalTargetRequests > 0) {
+            long claimed = requestCount.getAndIncrement();
+            if (claimed >= totalTargetRequests) {
+                requestCount.decrementAndGet();
+                return false;
+            }
+        }
+        
         if (rateLimiter != null) {
             rateLimiter.acquire();
         }
         
-        // 2. Acquire a slot (blocks if all clients are at max pipeline depth)
-        //    This provides backpressure - we won't submit if all clients are busy
-        globalSlots.acquire();
-        
-        // 3. Find a client with an available slot
-        ClientSlot slot = findAvailableSlot(clientSlots, requestCount.get());
-        
-        // 4. Acquire the client's local slot
-        slot.availableSlots.acquire();
-        
-        // Note: Do NOT release globalSlots here - it will be released in the completion callback.
-        // Releasing here would cause permit inflation and break backpressure.
-        
-        // 5. Select command
         Command command = selector.select();
-        
-        // 6. Track pending (and increment for duration-based only)
-        pendingCount.incrementAndGet();
-        if (targetRequests <= 0) {
-            requestCount.incrementAndGet(); // Duration-based: increment here
-        }
-        
-        // 7. Execute async
-        command.execute(slot.client, keyGenerator)
-                .thenAccept(result -> {
-                    metrics.record(result);
-                    slot.availableSlots.release(); // Release slot for next request
-                    pendingCount.decrementAndGet();
-                    globalSlots.release(); // Notify a slot is available
-                })
-                .exceptionally(ex -> {
-                    // Still release slot on error
-                    slot.availableSlots.release();
-                    pendingCount.decrementAndGet();
-                    globalSlots.release();
-                    return null;
-                });
+        pending.add(command.execute(client, keyGen));
         return true;
     }
-    
-    /**
-     * Find an available client slot using round-robin with fallback.
-     */
-    private ClientSlot findAvailableSlot(List<ClientSlot> clientSlots, long requestIndex) {
-        int startIndex = (int) (requestIndex % clientSlots.size());
-        
-        // First try round-robin index
-        ClientSlot preferred = clientSlots.get(startIndex);
-        if (preferred.availableSlots.availablePermits() > 0) {
-            return preferred;
-        }
-        
-        // Otherwise find first available
-        for (ClientSlot slot : clientSlots) {
-            if (slot.availableSlots.availablePermits() > 0) {
-                return slot;
-            }
-        }
-        
-        // All busy - return round-robin (will block on acquire)
-        return preferred;
-    }
 
-    private void closeClientSlots(List<ClientSlot> clientSlots) {
-        logger.info("Closing {} connections...", clientSlots.size());
-        for (ClientSlot slot : clientSlots) {
+    private void closeClients(List<BenchmarkClient> clients) {
+        logger.info("Closing {} connections...", clients.size());
+        for (BenchmarkClient client : clients) {
             try {
-                slot.client.close();
+                client.close();
             } catch (Exception e) {
                 logger.warn("Error closing client: {}", e.getMessage());
             }
@@ -557,77 +492,7 @@ public class BenchmarkEngine {
     }
     
     /**
-     * Submits warmup requests to occupy slots and establish steady-state backpressure.
-     * 
-     * <p>Sends PING commands on all clients using the SAME semaphores that the
-     * measured workload will use. Does NOT wait for completion - the warmup
-     * requests remain in-flight and will pace the subsequent measured requests.</p>
-     * 
-     * <p>This prevents initial burst because:</p>
-     * <ol>
-     *   <li>Warmup acquires slots (reducing available permits)</li>
-     *   <li>Measured workload starts immediately (must wait for available slots)</li>
-     *   <li>As warmup responses arrive, slots become available one at a time</li>
-     *   <li>Measured requests fill slots gradually, no burst</li>
-     * </ol>
-     * 
-     * @param clientSlots the client slots to warm up
-     * @param warmupRequestsPerClient number of warmup requests per client
-     * @param globalSlots the shared semaphore for backpressure (same as main workload)
-     */
-    private void submitWarmup(List<ClientSlot> clientSlots, int warmupRequestsPerClient, 
-                              Semaphore globalSlots) {
-        
-        int totalWarmupRequests = clientSlots.size() * warmupRequestsPerClient;
-        logger.info("Submitting warmup: {} requests per client ({} total)...", 
-                    warmupRequestsPerClient, totalWarmupRequests);
-        
-        // Submit warmup requests (they acquire slots from the shared semaphore)
-        for (int r = 0; r < warmupRequestsPerClient; r++) {
-            for (ClientSlot slot : clientSlots) {
-                // Try to acquire slots (non-blocking if slots available)
-                boolean acquired = globalSlots.tryAcquire();
-                if (!acquired) {
-                    // All slots occupied - skip remaining warmup
-                    // This shouldn't happen with warmup_requests=1, but handles edge cases
-                    logger.debug("Warmup slots exhausted, {} requests submitted", 
-                                r * clientSlots.size());
-                    return;
-                }
-                
-                boolean localAcquired = slot.availableSlots.tryAcquire();
-                if (!localAcquired) {
-                    // Client slot busy - release global and skip
-                    globalSlots.release();
-                    continue;
-                }
-                
-                // Send PING (no metrics recording)
-                // Slots are released when response arrives, naturally pacing subsequent requests
-                slot.client.ping()
-                        .thenAccept(result -> {
-                            slot.availableSlots.release();
-                            globalSlots.release();
-                        })
-                        .exceptionally(ex -> {
-                            slot.availableSlots.release();
-                            globalSlots.release();
-                            return null;
-                        });
-            }
-        }
-        
-        logger.info("Warmup submitted, proceeding to measured workload (slots occupied by warmup will pace requests)");
-    }
-    
-    /**
      * Log progress if enough time has elapsed since last log.
-     * 
-     * @param current current request count
-     * @param target target request count (-1 for duration-based completion)
-     * @param lastLogTime timestamp of last log
-     * @param startTime timestamp when workload started
-     * @return updated lastLogTime
      */
     private long logProgressIfNeeded(long current, long target, long lastLogTime, long startTime) {
         long now = System.currentTimeMillis();
@@ -647,21 +512,6 @@ public class BenchmarkEngine {
         }
         
         return now;
-    }
-
-    /**
-     * Wraps a BenchmarkClient with semaphore-based backpressure control.
-     */
-    private static class ClientSlot {
-        final BenchmarkClient client;
-        final Semaphore availableSlots;
-        final int pipelineDepth;
-
-        ClientSlot(BenchmarkClient client, int pipelineDepth) {
-            this.client = client;
-            this.pipelineDepth = pipelineDepth;
-            this.availableSlots = new Semaphore(pipelineDepth);
-        }
     }
 
     /**
