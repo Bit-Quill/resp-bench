@@ -6,12 +6,13 @@ C# (.NET 10) implementation of the resp-bench benchmark suite.
 
 | Driver | Package | Description |
 |--------|---------|-------------|
+| valkey-glide-csharp | [Valkey.Glide](https://github.com/valkey-io/valkey-glide-csharp) | Valkey GLIDE C# client — high-performance Rust-core client with StackExchange.Redis-compatible API |
 | stackexchange-redis | [StackExchange.Redis](https://github.com/StackExchange/StackExchange.Redis) | Most popular .NET Redis client |
-| valkey-glide-csharp | [valkey-glide-csharp](https://github.com/valkey-io/valkey-glide-csharp) | Valkey GLIDE C# client (planned) |
 
 ## Prerequisites
 
 - .NET 10.0 SDK or later
+- Valkey/Redis server on localhost:6379 (for integration tests and benchmarks)
 
 ## Build
 
@@ -29,9 +30,18 @@ make csharp-test
 cd csharp && dotnet test
 ```
 
+**Note:** Integration tests run against all supported drivers (`valkey-glide-csharp`, `stackexchange-redis`) with a live Valkey server, matching the Java engine's multi-driver test approach.
+
 ## Run Benchmark
 
 ```bash
+# Using Valkey GLIDE
+make csharp-run \
+  DRIVER=configs/drivers/example-valkey-glide-csharp-standalone.json \
+  WORKLOAD=configs/workloads/example-workload.json \
+  SERVER=localhost:6379
+
+# Using StackExchange.Redis
 make csharp-run \
   DRIVER=configs/drivers/example-stackexchange-redis-standalone.json \
   WORKLOAD=configs/workloads/example-workload.json \
@@ -54,7 +64,7 @@ The C# engine uses a **Task-per-client** architecture equivalent to Java's Virtu
 - `ConcurrentDictionary` + `Interlocked` for thread-safe metrics
 - Pipeline depth > 1 uses `Task.WhenAny()` (equivalent to Java's `CompletableFuture.anyOf()`)
 - `Stopwatch.GetTimestamp()` for microsecond-precision timing
-- `SynchronizedHistogram` from HdrHistogram.NET for latency capture
+- `LongConcurrentHistogram` from HdrHistogram.NET for latency capture
 
 ## Configuration
 

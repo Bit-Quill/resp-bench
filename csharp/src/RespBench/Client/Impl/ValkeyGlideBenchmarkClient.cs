@@ -3,31 +3,27 @@
  *
  * Valkey GLIDE C# client implementation.
  * Based on https://github.com/valkey-io/valkey-glide-csharp
+ * NuGet: Valkey.Glide v0.9.0
  *
- * NOTE: This implementation is a placeholder skeleton. The valkey-glide-csharp
- * NuGet package must be available and the PackageReference uncommented in
- * RespBench.csproj before this can compile against the real API.
- * The API calls below follow the patterns documented in the valkey-glide-csharp README.
+ * Valkey.Glide uses a StackExchange.Redis-compatible API
+ * (ConnectionMultiplexer, IDatabase, IServer), so the implementation
+ * mirrors StackExchangeRedisBenchmarkClient closely.
  */
 using System.Diagnostics;
 using RespBench.Config;
+using Valkey.Glide;
 
 namespace RespBench.Client.Impl;
 
 /// <summary>
 /// Valkey GLIDE C# implementation of IBenchmarkClient.
-/// Uses the valkey-glide-csharp library (https://github.com/valkey-io/valkey-glide-csharp).
-///
-/// Currently a skeleton — uncomment the Valkey.Glide NuGet reference and
-/// replace the TODO placeholders with real API calls when the package is available.
+/// Uses the StackExchange.Redis-compatible API provided by Valkey.Glide.
 /// </summary>
 public class ValkeyGlideBenchmarkClient : IBenchmarkClient
 {
-    // TODO: Replace with real types when Valkey.Glide NuGet is available:
-    // private GlideClient? _glideClient;
-    // private GlideClusterClient? _glideClusterClient;
-    private object? _glideClient;
-    private bool _isClusterMode;
+    private IConnectionMultiplexer? _connection;
+    private IDatabase? _db;
+    private IServer? _server;
     private volatile bool _connected;
 
     public string DriverId => "valkey-glide-csharp";
@@ -38,106 +34,97 @@ public class ValkeyGlideBenchmarkClient : IBenchmarkClient
     {
         get
         {
-            // TODO: Get version from Valkey.Glide assembly when available
-            // try { return typeof(GlideClient).Assembly.GetName().Version?.ToString() ?? "unknown"; }
-            return "0.1.0-dev";
+            try
+            {
+                return typeof(ConnectionMultiplexer).Assembly.GetName().Version?.ToString() ?? "0.9.0";
+            }
+            catch
+            {
+                return "0.9.0";
+            }
         }
     }
 
     public void Connect(string host, int port, DriverConfig driverConfig)
     {
-        _isClusterMode = driverConfig.IsClusterMode;
+        try
+        {
+            var connectionString = $"{host}:{port}";
 
-        // TODO: Replace with real Valkey GLIDE C# API when NuGet package is available.
-        // Based on valkey-glide-csharp README:
-        //
-        // if (_isClusterMode)
-        // {
-        //     var config = new GlideClusterClientConfiguration()
-        //         .WithAddress(host, port);
-        //     if (driverConfig.IsTlsEnabled) config.WithTls(true);
-        //     if (driverConfig.HasAuth)
-        //     {
-        //         if (!string.IsNullOrEmpty(driverConfig.Auth?.Username))
-        //             config.WithCredentials(driverConfig.Auth.Username, driverConfig.Auth.Password);
-        //         else
-        //             config.WithCredentials(driverConfig.Auth!.Password);
-        //     }
-        //     if (driverConfig.CommandTimeoutMs.HasValue)
-        //         config.WithRequestTimeout(driverConfig.CommandTimeoutMs.Value);
-        //     _glideClusterClient = await GlideClusterClient.CreateClient(config);
-        // }
-        // else
-        // {
-        //     var config = new GlideClientConfiguration()
-        //         .WithAddress(host, port);
-        //     if (driverConfig.IsTlsEnabled) config.WithTls(true);
-        //     if (driverConfig.HasAuth) { ... }
-        //     if (driverConfig.CommandTimeoutMs.HasValue) { ... }
-        //     _glideClient = await GlideClient.CreateClient(config);
-        // }
-        //
-        // // Test connection
-        // var pong = _isClusterMode
-        //     ? await _glideClusterClient!.Ping()
-        //     : await _glideClient!.Ping();
+            _connection = ConnectionMultiplexer.ConnectAsync(connectionString).GetAwaiter().GetResult();
+            _db = _connection.GetDatabase();
 
-        throw new ClientException(
-            "valkey-glide-csharp NuGet package is not yet available. " +
-            "Uncomment the PackageReference in RespBench.csproj and update this file " +
-            "when the package is published. See: https://github.com/valkey-io/valkey-glide-csharp");
+            var endpoints = _connection.GetEndPoints();
+            if (endpoints.Length > 0)
+                _server = _connection.GetServer(endpoints[0]);
+
+            // Test connection
+            _server?.PingAsync().GetAwaiter().GetResult();
+
+            _connected = true;
+            Console.WriteLine($"ValkeyGlide C# connected successfully to {host}:{port}");
+        }
+        catch (Exception e)
+        {
+            throw new ClientException($"Failed to connect ValkeyGlide C# to {host}:{port}: {e.Message}", e);
+        }
     }
 
-    public Task<TimedResult<object?>> Set(byte[] key, byte[] value)
+    public async Task<TimedResult<object?>> Set(byte[] key, byte[] value)
     {
-        // TODO: return AsyncHelper.TimedVoidAsync(async () => {
-        //     if (_isClusterMode) await _glideClusterClient!.Set(key, value);
-        //     else await _glideClient!.Set(key, value);
-        // });
-        throw new NotImplementedException("valkey-glide-csharp not yet available");
+        long start = Stopwatch.GetTimestamp();
+        await _db!.StringSetAsync((ValkeyKey)key, (ValkeyValue)value).ConfigureAwait(false);
+        long latencyMicros = GetElapsedMicros(start);
+        return TimedResult<object?>.OfVoid(latencyMicros);
     }
 
-    public Task<TimedResult<byte[]?>> Get(byte[] key)
+    public async Task<TimedResult<byte[]?>> Get(byte[] key)
     {
-        // TODO: return AsyncHelper.TimedAsync(async () => {
-        //     return _isClusterMode
-        //         ? await _glideClusterClient!.Get(key)
-        //         : await _glideClient!.Get(key);
-        // });
-        throw new NotImplementedException("valkey-glide-csharp not yet available");
+        long start = Stopwatch.GetTimestamp();
+        ValkeyValue result = await _db!.StringGetAsync((ValkeyKey)key).ConfigureAwait(false);
+        long latencyMicros = GetElapsedMicros(start);
+        return TimedResult<byte[]?>.Of((byte[]?)result, latencyMicros);
     }
 
-    public Task<TimedResult<string?>> Ping()
+    public async Task<TimedResult<string?>> Ping()
     {
-        // TODO: return AsyncHelper.TimedAsync(async () => {
-        //     return _isClusterMode
-        //         ? await _glideClusterClient!.Ping()
-        //         : await _glideClient!.Ping();
-        // });
-        throw new NotImplementedException("valkey-glide-csharp not yet available");
+        long start = Stopwatch.GetTimestamp();
+        await _server!.PingAsync().ConfigureAwait(false);
+        long latencyMicros = GetElapsedMicros(start);
+        return TimedResult<string?>.Of("PONG", latencyMicros);
     }
 
     public Task<TimedResult<string?>> Ping(byte[] message) => Ping();
 
-    public Task<TimedResult<long>> Del(params byte[][] keys)
+    public async Task<TimedResult<long>> Del(params byte[][] keys)
     {
-        // TODO: return AsyncHelper.TimedAsync(async () => {
-        //     return _isClusterMode
-        //         ? await _glideClusterClient!.Del(keys)
-        //         : await _glideClient!.Del(keys);
-        // });
-        throw new NotImplementedException("valkey-glide-csharp not yet available");
+        long start = Stopwatch.GetTimestamp();
+        var valkeyKeys = keys.Select(k => (ValkeyKey)k).ToArray();
+        long count = await _db!.KeyDeleteAsync(valkeyKeys).ConfigureAwait(false);
+        long latencyMicros = GetElapsedMicros(start);
+        return TimedResult<long>.Of(count, latencyMicros);
     }
 
-    public Task<TimedResult<object?>> FlushDb()
+    public async Task<TimedResult<object?>> FlushDb()
     {
-        throw new NotImplementedException("valkey-glide-csharp not yet available");
+        long start = Stopwatch.GetTimestamp();
+        await _db!.ExecuteAsync("FLUSHDB").ConfigureAwait(false);
+        long latencyMicros = GetElapsedMicros(start);
+        return TimedResult<object?>.OfVoid(latencyMicros);
     }
 
     public void Dispose()
     {
         _connected = false;
-        // TODO: _glideClient?.Dispose(); _glideClusterClient?.Dispose();
-        _glideClient = null;
+        try { _connection?.Dispose(); } catch { }
+        _connection = null;
+        _db = null;
+        _server = null;
+    }
+
+    private static long GetElapsedMicros(long startTimestamp)
+    {
+        long elapsed = Stopwatch.GetTimestamp() - startTimestamp;
+        return elapsed * 1_000_000 / Stopwatch.Frequency;
     }
 }

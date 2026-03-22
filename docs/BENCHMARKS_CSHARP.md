@@ -8,8 +8,8 @@ The C# engine is a .NET implementation of the resp-bench benchmark suite, design
 
 | Driver ID | Package | Status | Description |
 |-----------|---------|--------|-------------|
+| `valkey-glide-csharp` | [Valkey.Glide](https://github.com/valkey-io/valkey-glide-csharp) | ✅ Ready | Valkey GLIDE C# — high-performance Rust-core client with StackExchange.Redis-compatible API |
 | `stackexchange-redis` | [StackExchange.Redis](https://github.com/StackExchange/StackExchange.Redis) | ✅ Ready | Most popular .NET Redis client. Multiplexed connection model. |
-| `valkey-glide-csharp` | [valkey-glide-csharp](https://github.com/valkey-io/valkey-glide-csharp) | 🔧 Skeleton | Awaiting NuGet package availability. Client structure ready. |
 
 ## Architecture
 
@@ -43,7 +43,8 @@ Main thread
 
 ## Prerequisites
 
-- .NET 8.0 SDK or later (targets the installed runtime version)
+- .NET 10.0 SDK or later
+- Valkey/Redis server on localhost:6379 (for integration tests)
 
 ## Build & Test
 
@@ -51,11 +52,8 @@ Main thread
 # Build
 make csharp-build
 
-# Run unit tests
+# Run all tests (requires live Valkey server for integration tests)
 make csharp-test
-
-# Run integration tests (requires running Valkey server)
-make csharp-integration-test
 
 # Show driver info
 make csharp-info
@@ -64,6 +62,13 @@ make csharp-info
 ## Usage
 
 ```bash
+# Using Valkey GLIDE (recommended)
+make csharp-run \
+  DRIVER=configs/drivers/example-valkey-glide-csharp-standalone.json \
+  WORKLOAD=configs/workloads/example-workload.json \
+  SERVER=localhost:6379
+
+# Using StackExchange.Redis
 make csharp-run \
   DRIVER=configs/drivers/example-stackexchange-redis-standalone.json \
   WORKLOAD=configs/workloads/example-workload.json \
@@ -72,32 +77,45 @@ make csharp-run \
 
 ## Test Coverage
 
-The C# engine includes tests ported from the Java reference implementation:
+The C# engine includes tests ported from the Java reference implementation.
+Integration tests are parameterized across **all supported drivers** (`valkey-glide-csharp`, `stackexchange-redis`),
+matching Java's `@ParameterizedTest @MethodSource("allDrivers")` pattern.
 
-### Unit Tests
-- **ConfigLoaderTest** — JSON parsing, validation, cluster/TLS detection
-- **KeyGeneratorTest** — Sequential, random, reset, fork for threads
-- **RateLimiterTest** — Create, tryAcquire, constant rate enforcement
+### Unit Tests (20)
+- **ConfigLoaderTest** (7) — JSON parsing, validation, cluster/TLS detection
+- **KeyGeneratorTest** (4) — Sequential, random, reset, fork for threads
+- **RateLimiterTest** (9) — Create, tryAcquire, constant rate enforcement
 
-### Integration Tests (Recording Client)
-- **MetricsOutputTest** — NDJSON format, request counts, schema validation, multi-phase
-- **RecordingClientWorkloadTest** — Key prefix, sequential keys, data sizes
-- **ErrorMetricsIntegrationTest** — Error simulation (10%/100%/0%), error rates
-- **RateLimitingTest** — RPS limit, CPS limit, combined limits, no-limit throughput
+### Integration Tests — All Drivers (16 = 8 theories × 2 drivers)
+- **MetricsOutputTest** — NDJSON format, request counts, schema validation, multi-phase, histogram encoding
+  - Runs each test with both `stackexchange-redis` and `valkey-glide-csharp`
+
+### Integration Tests — Recording Client (33)
+- **RecordingClientWorkloadTest** (8) — Key prefix, sequential keys, data sizes, wrap-around
+- **ErrorMetricsIntegrationTest** (10) — Error simulation (10%/100%/0%), per-command error rates
+- **RateLimitingTest** (7) — RPS limit, CPS limit, combined limits, no-limit throughput
+- **MetricsOutputTest** (5 recording-only) — Parallel issuers, long-tail latency, duration-based completion
+- **BenchmarkIntegrationTest** (3) — Live server connection tests for each driver
 
 ## Configuration
 
 Same JSON configuration files as all other engines. See [CONFIG_SPECIFICATION.md](CONFIG_SPECIFICATION.md).
 
-### StackExchange.Redis-Specific Config
+### Valkey GLIDE C# Config
+
+```json
+{
+  "driver_id": "valkey-glide-csharp",
+  "mode": "standalone"
+}
+```
+
+### StackExchange.Redis Config
 
 ```json
 {
   "driver_id": "stackexchange-redis",
-  "mode": "standalone",
-  "specific_driver_config": {
-    // StackExchange.Redis-specific options can be added here
-  }
+  "mode": "standalone"
 }
 ```
 
@@ -105,7 +123,7 @@ Same JSON configuration files as all other engines. See [CONFIG_SPECIFICATION.md
 
 Produces identical NDJSON format as Java and Ruby engines, including:
 - Phase metadata (id, status, timestamps, duration, connections)
-- Per-command latency histograms with base64-encoded HdrHistogram payload
+- Per-command latency histograms with base64-encoded HdrHistogram payload (V2 format)
 - Summary percentiles (p50, p95, p99, p99.9)
 
 ## Author

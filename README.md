@@ -88,7 +88,7 @@ Thread-based system metrics collector that runs alongside benchmarks, collecting
 |----------|--------|---------|
 | Java | ✅ Ready | Jedis, Lettuce, Valkey-Glide, Redisson, Spring Data Valkey/Redis |
 | Ruby | ✅ Ready | redis-rb, valkey-glide-ruby |
-| C# | ✅ Ready | StackExchange.Redis, valkey-glide-csharp |
+| C# | ✅ Ready | valkey-glide-csharp, StackExchange.Redis |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 
 ## Project Structure
@@ -125,6 +125,7 @@ resp-bench/
 │   ├── INTERACTIVE_GRAPHS.md    # Graph generator docs
 │   ├── CONFIG_SPECIFICATION.md  # Configuration format spec
 │   ├── BENCHMARKS_JAVA.md       # Java benchmark details
+│   ├── BENCHMARKS_CSHARP.md     # C# benchmark details
 │   └── BENCHMARKS_RUBY.md       # Ruby benchmark details
 └── graphs/interactive/          # Generated HTML graphs
 ```

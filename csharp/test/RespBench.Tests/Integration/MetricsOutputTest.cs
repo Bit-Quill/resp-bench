@@ -25,11 +25,11 @@ public class MetricsOutputTest : IDisposable
 
     // === Driver Configurations for Parameterized Tests ===
     // C# equivalent of Java's allDrivers() — all available C# drivers
+    // These tests require a live Valkey/Redis server on localhost:6379
     public static IEnumerable<object[]> AllDrivers()
     {
-        yield return new object[] { "recording", """{"driver_id": "recording", "mode": "standalone"}""" };
-        // Live server drivers — uncomment when running with make csharp-integration-test
-        // yield return new object[] { "stackexchange-redis", """{"driver_id": "stackexchange-redis", "mode": "standalone"}""" };
+        yield return new object[] { "stackexchange-redis", """{"driver_id": "stackexchange-redis", "mode": "standalone"}""" };
+        yield return new object[] { "valkey-glide-csharp", """{"driver_id": "valkey-glide-csharp", "mode": "standalone"}""" };
     }
 
     // === Parameterized NDJSON Format Tests (run with all drivers) ===

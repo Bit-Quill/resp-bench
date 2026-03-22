@@ -44,7 +44,7 @@ public class BenchmarkIntegrationTest
         client.Del(key).Wait();
     }
 
-    [Fact(Skip = "valkey-glide-csharp NuGet package not yet available")]
+    [Fact]
     public void ValkeyGlideCsharpClientShouldConnect()
     {
         var config = ConfigLoader.ParseDriverConfig("""
