@@ -209,10 +209,11 @@ public class BenchmarkEngine
             }
 
             // Progress logging
+            var allDone = Task.WhenAll(workerTasks);
             long lastLogTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            while (!Task.WhenAll(workerTasks).IsCompleted)
+            while (!allDone.IsCompleted)
             {
-                try { await Task.WhenAll(workerTasks).WaitAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false); }
+                try { await allDone.WaitAsync(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false); }
                 catch (TimeoutException) { }
                 catch { break; }
 
