@@ -30,10 +30,10 @@ WORK_DIR=$(shell pwd)/work
 	server-cluster-start server-cluster-stop server-cluster-init \
 	server-sentinel-start server-sentinel-stop \
 	server-start server-stop \
-	java-build java-test java-run java-clean \
+	java-build java-test java-run java-run-nobuild java-clean \
 	python-build python-test python-run python-clean \
-	ruby-build ruby-test ruby-run ruby-clean ruby-info \
-	csharp-build csharp-test csharp-run csharp-clean csharp-info \
+	ruby-build ruby-test ruby-run ruby-run-nobuild ruby-clean ruby-info \
+	csharp-build csharp-test csharp-run csharp-run-nobuild csharp-clean csharp-info \
 	config-editor-build config-editor-dev
 
 # ============================================================================
@@ -54,6 +54,7 @@ help:
 	@echo "  make java-build             Build Java benchmark engine"
 	@echo "  make java-test              Run Java tests"
 	@echo "  make java-run               Run Java benchmark (requires DRIVER and WORKLOAD)"
+	@echo "  make java-run-nobuild       Run Java benchmark without rebuilding first"
 	@echo "  make java-clean             Clean Java build artifacts"
 	@echo ""
 	@echo "Python Engine (placeholder):"
@@ -65,12 +66,14 @@ help:
 	@echo "  make ruby-build             Install Ruby dependencies"
 	@echo "  make ruby-test              Run Ruby tests"
 	@echo "  make ruby-run               Run Ruby benchmark (requires DRIVER and WORKLOAD)"
+	@echo "  make ruby-run-nobuild       Run Ruby benchmark without re-running bundle install"
 	@echo "  make ruby-info              Show supported Ruby drivers and commands"
 	@echo ""
 	@echo "C# Engine:"
 	@echo "  make csharp-build           Build C# benchmark engine"
 	@echo "  make csharp-test            Run C# tests"
 	@echo "  make csharp-run             Run C# benchmark (requires DRIVER and WORKLOAD)"
+	@echo "  make csharp-run-nobuild     Run C# benchmark without rebuilding first"
 	@echo "  make csharp-clean           Clean C# build artifacts"
 	@echo "  make csharp-info            Show supported C# drivers and commands"
 	@echo ""
@@ -284,12 +287,24 @@ java-integration-test: server-standalone-start
 	cd java && VALKEY_HOST=localhost VALKEY_PORT=6379 mvn test -DincludeIntegrationTests
 	$(MAKE) server-standalone-stop
 
+# The run command is held in a variable so `java-run` and `java-run-nobuild`
+# cannot drift apart. Deliberately not `java-run: java-build java-run-nobuild`:
+# prerequisite ordering is not guaranteed under `make -j`, and a benchmark that
+# silently runs a stale jar is worse than a duplicated prerequisite.
+JAVA_RUN_CMD=java -jar $(JAVA_JAR) \
+	--server $(SERVER) \
+	--driver $(DRIVER) \
+	--workload $(WORKLOAD) \
+	--metrics $(METRICS_OUTPUT)
+
 java-run: java-build
-	java -jar $(JAVA_JAR) \
-		--server $(SERVER) \
-		--driver $(DRIVER) \
-		--workload $(WORKLOAD) \
-		--metrics $(METRICS_OUTPUT)
+	$(JAVA_RUN_CMD)
+
+# Same as java-run but assumes the engine is already built. Used by the matrix
+# orchestrator, which builds each engine it needs once per sweep instead of
+# once per cell.
+java-run-nobuild:
+	$(JAVA_RUN_CMD)
 
 java-run-cluster: java-build
 	java -jar $(JAVA_JAR) \
@@ -342,12 +357,18 @@ ruby-integration-test: server-standalone-start
 	cd ruby && VALKEY_HOST=localhost VALKEY_PORT=6379 bundle exec rake integration
 	$(MAKE) server-standalone-stop
 
+RUBY_RUN_CMD=cd ruby && bundle exec ruby bin/resp-bench \
+	--server $(SERVER) \
+	--driver ../$(DRIVER) \
+	--workload ../$(WORKLOAD) \
+	--metrics ../$(METRICS_OUTPUT)
+
 ruby-run: ruby-build
-	cd ruby && bundle exec ruby bin/resp-bench \
-		--server $(SERVER) \
-		--driver ../$(DRIVER) \
-		--workload ../$(WORKLOAD) \
-		--metrics ../$(METRICS_OUTPUT)
+	$(RUBY_RUN_CMD)
+
+# Same as ruby-run but skips `bundle install` — see java-run-nobuild.
+ruby-run-nobuild:
+	$(RUBY_RUN_CMD)
 
 ruby-clean:
 	cd ruby && rm -rf vendor .bundle Gemfile.lock
@@ -372,12 +393,21 @@ csharp-integration-test: server-standalone-start
 	cd csharp && VALKEY_HOST=localhost VALKEY_PORT=6379 dotnet test --filter "Category=Integration"
 	$(MAKE) server-standalone-stop
 
+# Only the arguments are shared here, not the whole command: unlike java and
+# ruby, the two C# recipes genuinely differ — `dotnet run` builds by default, so
+# the nobuild variant has to pass --no-build.
+CSHARP_RUN_ARGS=--server $(SERVER) \
+	--driver $(DRIVER) \
+	--workload $(WORKLOAD) \
+	--metrics $(METRICS_OUTPUT)
+
 csharp-run: csharp-build
-	dotnet run --project $(CSHARP_PROJECT) -c Release -- \
-		--server $(SERVER) \
-		--driver $(DRIVER) \
-		--workload $(WORKLOAD) \
-		--metrics $(METRICS_OUTPUT)
+	dotnet run --project $(CSHARP_PROJECT) -c Release -- $(CSHARP_RUN_ARGS)
+
+# Same as csharp-run but assumes the engine is already built, so `dotnet run`
+# skips its own incremental build too — see java-run-nobuild.
+csharp-run-nobuild:
+	dotnet run --project $(CSHARP_PROJECT) -c Release --no-build -- $(CSHARP_RUN_ARGS)
 
 csharp-clean:
 	cd csharp && dotnet clean
@@ -408,7 +438,9 @@ GRAPHS_DIR?=graphs/interactive/
 RUN_ID?=latest
 MATRIX_RESULTS_DIR=$(OUTPUT_DIR)/$(RUN_ID)
 
-benchmark-matrix: java-build
+# No build prerequisite: the orchestrator builds every engine the matrix needs
+# (and only those) once, before the sweep starts.
+benchmark-matrix:
 	python scripts/run_benchmark_matrix.py \
 		--matrix $(MATRIX) \
 		--output-dir $(OUTPUT_DIR) \

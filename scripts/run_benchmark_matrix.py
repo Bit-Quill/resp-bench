@@ -722,23 +722,30 @@ def count_ndjson_lines(path, offset=0):
         return sum(1 for line in f if line.strip())
 
 
-def run_benchmark(server, driver_file, workload_file, metrics_output, env_overrides=None):
-    """Run a single benchmark via `make java-run`."""
-    env = os.environ.copy()
-    if env_overrides:
-        env.update({k: str(v) for k, v in env_overrides.items()})
+def engines_for_combos(series_combos):
+    """Map each distinct driver config path to the engine that runs it.
 
-    subprocess.run(
-        [
-            "make", "java-run",
-            f"SERVER={server}",
-            f"DRIVER={driver_file}",
-            f"WORKLOAD={workload_file}",
-            f"METRICS_OUTPUT={metrics_output}",
-        ],
-        check=True,
-        env=env,
-    )
+    Each config file is read once, however many cells reference it.
+    """
+    driver_configs = {combo["driver_config"] for combo in series_combos}
+    return {path: detect_engine_for_driver(path) for path in driver_configs}
+
+
+def build_engines(engines):
+    """Run `make <engine>-build` for each engine, aborting on the first failure.
+
+    Cells run via the `*-run-nobuild` targets, so a sweep builds each engine it
+    needs exactly once instead of once per cell.
+    """
+    for engine in engines:
+        target = f"{engine}-build"
+        print(f"\n=== building engine: make {target} ===", flush=True)
+        result = subprocess.run(["make", target])
+        if result.returncode != 0:
+            sys.exit(
+                f"ERROR: 'make {target}' failed with exit code "
+                f"{result.returncode}; aborting matrix run"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -921,6 +928,11 @@ def run_matrix(config, output_dir, server_host, port, run_id=None, resume=False,
 
     run_id = run_id or default_run_id()
 
+    # Resolve the engine per driver config up front, so the build phase and the
+    # per-cell run phase can never disagree about which engine a series uses.
+    engine_by_driver = engines_for_combos(series_combos)
+    engines = sorted(set(engine_by_driver.values()))
+
     print("=" * 70)
     print(f"Matrix Benchmark Run")
     print(f"  Description: {config['description']}")
@@ -936,6 +948,7 @@ def run_matrix(config, output_dir, server_host, port, run_id=None, resume=False,
             print(f"      bindings: {combo['bindings']}")
     print(f"  Iterations:  {iterations}")
     print(f"  Total runs:  {total_cells}")
+    print(f"  Engines:     {', '.join(engines)}")
     print("=" * 70)
 
     # Preflight — refuse to start rather than dying part-way through the sweep
@@ -952,6 +965,10 @@ def run_matrix(config, output_dir, server_host, port, run_id=None, resume=False,
     latest_link = update_latest_link(output_dir, run_id)
     if latest_link:
         print(f"Preflight: {latest_link} -> {run_id}")
+
+    # Build each needed engine exactly once, now that preflight has confirmed the
+    # server is reachable — no point compiling if the sweep can't run.
+    build_engines(engines)
 
     # Write manifest
     write_manifest(results_dir, config, series_combos, run_id=run_id, resumed=resume)
@@ -1016,10 +1033,10 @@ def run_matrix(config, output_dir, server_host, port, run_id=None, resume=False,
                     if env_overrides:
                         bench_env.update({k: str(v) for k, v in env_overrides.items()})
 
-                    # Auto-detect engine from driver config
-                    engine = detect_engine_for_driver(str(driver_path))
+                    # Engine was resolved and built before the sweep started
+                    engine = engine_by_driver[driver_cfg_path]
                     bench_cmd = [
-                        "make", f"{engine}-run",
+                        "make", f"{engine}-run-nobuild",
                         f"SERVER={server}",
                         f"DRIVER={str(driver_path)}",
                         f"WORKLOAD={str(workload_path)}",
