@@ -63,6 +63,8 @@ from system_monitor import SystemMonitor
 
 SYSTEM_MONITOR_INTERVAL = 0.5
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 # Well-known dimension names with special handling
 DIM_CONNECTIONS = "connections"
 DIM_DRIVER_CONFIG = "driver_config"
@@ -90,6 +92,41 @@ DRIVER_ENGINE_MAP = {
     # Recording (default to java)
     "recording": "java",
 }
+
+
+def resolve_config_path(path_str):
+    """Resolve a path referenced by a matrix config, or None if it does not exist.
+
+    Matrix configs spell `workload_template` and `driver_config` relative to the
+    repository root, but the runner may be invoked from anywhere, so try the path
+    as written (i.e. relative to the CWD) and then relative to the repo root.
+
+    Both parse_matrix_config()'s validation and the runtime opens go through this
+    one function, so a path that validates is by construction a path the run can
+    open. Note it returns a resolved path *without* mutating the caller's string:
+    the config values double as identity — applies_to globs
+    (DimensionSpec.matches_driver) and _manifest.json both consume them — so
+    rewriting them would make matrix expansion and manifest contents depend on
+    where the repository happens to be checked out.
+    """
+    as_written = Path(path_str)
+    if as_written.is_file():
+        return as_written
+    if not as_written.is_absolute():
+        from_repo_root = REPO_ROOT / as_written
+        if from_repo_root.is_file():
+            return from_repo_root
+    return None
+
+
+def open_config_path(path_str):
+    """Resolve a matrix-referenced config path for reading, or raise."""
+    resolved = resolve_config_path(path_str)
+    if resolved is None:
+        raise FileNotFoundError(
+            f"config file referenced by the matrix does not exist: {path_str}"
+        )
+    return resolved
 
 
 def detect_engine_for_driver(driver_config_path):
@@ -205,47 +242,25 @@ def parse_matrix_config(matrix_path):
     if not config["workload_template"]:
         raise ValueError("'workload_template' is required in matrix config")
 
-    # Referenced config files must exist. Without this, a typo'd path only
-    # surfaces mid-run — after the server is up and the engine is built — and
-    # --dry-run reports success because the files are never opened. Worse,
-    # detect_engine_for_driver() swallows the resulting OSError and falls back
-    # to "java", so a bad path can silently benchmark the wrong engine.
-    repo_root = Path(__file__).resolve().parent.parent
-
-    def resolve_referenced_path(path_str):
-        """Return the path the run should use, or None if it does not exist.
-
-        Callers open these paths as written, i.e. relative to the CWD. Matrix
-        configs spell them relative to the repository root, so fall back to that
-        and hand back the resolved path — validation and execution have to agree
-        on one path, otherwise validating here proves nothing about the run.
-        """
-        as_written = Path(path_str)
-        if as_written.is_file():
-            return path_str
-        if not as_written.is_absolute() and (repo_root / as_written).is_file():
-            return str(repo_root / as_written)
-        return None
-
+    # Referenced config files must exist. Without this a typo'd path surfaces
+    # only mid-run — after the server is up and the engine has been built —
+    # because --dry-run never opens these files. Checking them through the same
+    # resolve_config_path() that generate_workload() and generate_driver_config()
+    # use means anything accepted here is openable by the run itself.
     missing = []
 
-    resolved = resolve_referenced_path(config["workload_template"])
-    if resolved is None:
-        missing.append(f"workload_template: {config['workload_template']}")
-    else:
-        config["workload_template"] = resolved
+    workload_template = config["workload_template"]
+    if not isinstance(workload_template, str) or resolve_config_path(workload_template) is None:
+        missing.append(f"workload_template: {workload_template!r}")
 
-    driver_dim = dimensions[DIM_DRIVER_CONFIG]
-    driver_values = list(driver_dim.values)
-    for i, value in enumerate(driver_values):
-        if not isinstance(value, str) or value.startswith("$"):
-            continue
-        resolved = resolve_referenced_path(value)
-        if resolved is None:
-            missing.append(f"{DIM_DRIVER_CONFIG}: {value}")
-        else:
-            driver_values[i] = resolved
-    driver_dim.values = driver_values
+    for value in dimensions[DIM_DRIVER_CONFIG].values:
+        # Every value is checked, including "$binding" strings. Unlike other
+        # dimensions, driver_config is never a binding target —
+        # generate_series_combos() excludes it from the series dimensions, so
+        # resolve_binding() never rewrites it and a "$foo" here would reach
+        # open() verbatim.
+        if not isinstance(value, str) or resolve_config_path(value) is None:
+            missing.append(f"{DIM_DRIVER_CONFIG}: {value!r}")
 
     if missing:
         raise ValueError(
@@ -391,7 +406,7 @@ def generate_series_combos(config):
 
 def generate_workload(template_path, connections):
     """Generate a workload JSON with the given connection count."""
-    with open(template_path) as f:
+    with open(open_config_path(template_path)) as f:
         workload = json.load(f)
 
     for phase in workload.get("phases", []):
@@ -406,7 +421,7 @@ def generate_driver_config(base_config_path, overrides):
     overrides is a dict of specific_driver_config keys to set,
     e.g. {"pool_size": 32, "use_pooling": true}.
     """
-    with open(base_config_path) as f:
+    with open(open_config_path(base_config_path)) as f:
         config = json.load(f)
 
     if overrides:

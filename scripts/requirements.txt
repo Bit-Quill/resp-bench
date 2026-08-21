@@ -2,8 +2,12 @@
 #
 #   python -m pip install -r scripts/requirements.txt
 #
-# Versions are pinned exactly so a fresh machine and CI resolve the same
-# packages. numpy is held below 2.5 because 2.5.x requires Python >= 3.12 and
+# Direct dependencies are pinned exactly so a fresh machine and CI resolve the
+# same matplotlib and numpy. Transitive dependencies (contourpy, pillow,
+# fonttools, kiwisolver, …) still float; fully locking them needs a compiled
+# lockfile (pip-compile / uv), the same follow-up as ruby/Gemfile.lock.
+#
+# numpy is held below 2.5 because 2.5.x requires Python >= 3.12 and
 # .github/workflows/benchmark.yml runs Python 3.11.
 #
 # Test-only dependencies (pytest) are deliberately not listed here.

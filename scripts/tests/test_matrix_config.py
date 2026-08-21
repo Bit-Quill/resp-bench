@@ -203,14 +203,77 @@ class TestConfigParsing:
         with pytest.raises(ValueError, match="no-such-driver.json"):
             parse_matrix_config(p)
 
-    def test_referenced_paths_are_openable_after_parse(self, simple_matrix):
-        # Repo-root-relative paths must survive parsing as something the run can
-        # actually open from the current CWD — validating a path the runner then
-        # fails to open would defeat the check.
+    def test_referenced_paths_are_openable_after_parse(self, simple_matrix, monkeypatch):
+        # A path that survives parse_matrix_config() must be one the run can
+        # actually open — validating against a different base than the runtime
+        # uses would prove nothing. Assert through the real consumers rather
+        # than re-implementing resolution here. chdir away from the repo root so
+        # the repo-root fallback is what is under test; run from the root and
+        # the paths resolve as written and prove nothing.
+        monkeypatch.chdir(simple_matrix.parent)
         config = parse_matrix_config(simple_matrix)
-        assert Path(config["workload_template"]).is_file()
+        assert generate_workload(config["workload_template"], 4)["phases"]
         for driver in config["dimensions"]["driver_config"].values:
-            assert Path(driver).is_file()
+            assert generate_driver_config(driver, {})
+
+    def test_parse_leaves_referenced_paths_verbatim(self, simple_matrix, monkeypatch):
+        # Validation must not rewrite the paths. These strings double as
+        # identity: DimensionSpec.matches_driver() fnmatches applies_to globs
+        # against the whole driver_config string, and write_manifest() records
+        # it. Normalizing to an absolute path would fold the checkout location
+        # into both — e.g. a clone under a directory whose name contains
+        # "glide" would make an `applies_to: ["*glide*"]` dimension match every
+        # driver.
+        #
+        # chdir is essential: rewriting only ever happened on the repo-root
+        # fallback, so from the repo root this test passes even against the
+        # rewriting version and catches nothing.
+        monkeypatch.chdir(simple_matrix.parent)
+        config = parse_matrix_config(simple_matrix)
+        assert config["workload_template"] == (
+            "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json"
+        )
+        assert config["dimensions"]["driver_config"].values == [
+            "configs/drivers/high-throughput/jedis.json"
+        ]
+
+    def test_driver_config_binding_is_rejected(self, tmp_path):
+        # driver_config is excluded from generate_series_combos()' series
+        # dimensions, so resolve_binding() never rewrites it and a "$binding"
+        # would reach open() verbatim mid-run. Reject it at parse time.
+        config = {
+            "x_axis": "connections",
+            "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+            "dimensions": {
+                "connections": [1],
+                "driver_config": ["$connections"],
+            },
+        }
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match=r"\$connections"):
+            parse_matrix_config(p)
+
+    @pytest.mark.parametrize("key", ["workload_template", "driver_config"])
+    def test_non_string_path_raises_value_error(self, tmp_path, key):
+        # A non-string here must join the aggregated ValueError like any other
+        # bad path, not escape as a bare TypeError out of pathlib.
+        config = {
+            "x_axis": "connections",
+            "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+            "dimensions": {
+                "connections": [1],
+                "driver_config": ["configs/drivers/high-throughput/jedis.json"],
+            },
+        }
+        if key == "workload_template":
+            config["workload_template"] = 5
+        else:
+            config["dimensions"]["driver_config"] = [5]
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match=key):
+            parse_matrix_config(p)
 
 
 class TestSeriesComboGeneration:

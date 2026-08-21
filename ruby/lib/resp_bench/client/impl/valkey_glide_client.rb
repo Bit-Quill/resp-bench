@@ -76,15 +76,11 @@ module RespBench
         end
 
         def driver_version
-          # For GitHub-sourced gems, report the git commit SHA instead of
-          # the hardcoded VERSION constant (which may lag behind main).
-          spec = Bundler.load.specs.find { |s| s.name == "valkey" }
-          if spec&.source.is_a?(Bundler::Source::Git)
-            spec.source.revision
-          else
-            Valkey::VERSION
-          end
-        rescue StandardError
+          # The Gemfile pins an exact released version of valkey-glide-rb, so the
+          # gem's own VERSION constant identifies the driver under measurement.
+          # (This used to look up a git-sourced spec named "valkey" to report a
+          # commit SHA; that gem name was never published by
+          # valkey-io/valkey-glide-ruby, so the lookup could not have matched.)
           Valkey::VERSION
         end
 
