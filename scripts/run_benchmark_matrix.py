@@ -21,13 +21,21 @@ Dimensions can be:
 One dimension is designated as the X axis (typically "connections").
 All other free dimensions form the series (one line per unique combo).
 
-Output is a flat directory with one NDJSON file per series label:
-    <output-dir>/<label>.ndjson
-    <output-dir>/<label>.cpu.ndjson
-    <output-dir>/_manifest.json
+Output is a flat directory per run, with one NDJSON file per series label:
+    <output-dir>/<run-id>/<label>.ndjson
+    <output-dir>/<run-id>/<label>.cpu.ndjson
+    <output-dir>/<run-id>/_manifest.json
+    <output-dir>/latest -> <run-id>       (symlink to the most recent run)
+
+The run id defaults to a UTC timestamp so separate runs never merge into the
+same files; pass --run-id to name a run explicitly, and --resume/--overwrite to
+deliberately write into a directory that already holds results. The `latest`
+symlink lets tooling find the newest run without knowing its id.
 
 The _manifest.json records the full configuration for each variant,
-allowing generate_interactive_graphs.py to build rich legends.
+allowing generate_interactive_graphs.py to build rich legends. It also records
+the outcome of every cell that was attempted, and the process exits non-zero if
+any cell failed.
 
 Usage:
     python scripts/run_benchmark_matrix.py \\
@@ -53,6 +61,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from system_monitor import SystemMonitor
@@ -63,7 +72,33 @@ from system_monitor import SystemMonitor
 
 SYSTEM_MONITOR_INTERVAL = 0.5
 
+# Repo root — scripts/ lives directly under it
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Server CLI resolution. SERVER_PROJECT is the same variable the Makefile uses
+# (`SERVER_PROJECT?=valkey`), so overriding it moves both the built binaries and
+# the path we look them up under. RESP_BENCH_CLI is an explicit escape hatch for
+# hosts where the binary lives somewhere else entirely.
+CLI_ENV_OVERRIDE = "RESP_BENCH_CLI"
+SERVER_PROJECT_ENV = "SERVER_PROJECT"
+DEFAULT_SERVER_PROJECT = "valkey"
+CLI_TIMEOUT_SECONDS = 10
+
+# Readiness probe: bounded retry before the sweep starts
+READINESS_ATTEMPTS = 5
+READINESS_DELAY_SECONDS = 1.0
+
+# Files that mark a run directory as already populated
+RESULT_PATTERNS = ("*.ndjson", "_manifest.json")
+
+# Symlink inside --output-dir pointing at the most recent run, so tooling (the
+# Makefile's benchmark-matrix-graphs target) can find results without a run id.
+LATEST_LINK_NAME = "latest"
+
+# Exit codes
+EXIT_OK = 0
+EXIT_CELL_FAILURES = 1
+EXIT_PREFLIGHT = 2
 
 # Well-known dimension names with special handling
 DIM_CONNECTIONS = "connections"
@@ -92,6 +127,48 @@ DRIVER_ENGINE_MAP = {
     # Recording (default to java)
     "recording": "java",
 }
+
+# Driver ids from DRIVER_ENGINE_MAP that generate their own latency and never
+# talk to a server: a matrix built only from these needs neither a readiness
+# probe nor a FLUSHALL. Keep in sync when adding a synthetic driver above.
+SERVERLESS_DRIVER_IDS = {"recording"}
+
+
+class PreflightError(RuntimeError):
+    """A precondition for the whole sweep is not met — nothing was run."""
+
+
+class CellFailure(RuntimeError):
+    """A single matrix cell failed — the sweep continues with the next cell."""
+
+
+def describe_exception(exc):
+    """One-line description of an exception, including captured stderr if any."""
+    detail = f"{type(exc).__name__}: {exc}"
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    if stderr and stderr.strip():
+        detail += f" — {stderr.strip()}"
+    return detail
+
+
+def read_driver_config(driver_config_path):
+    """Read a driver config JSON, returning {} if it cannot be read."""
+    try:
+        with open(driver_config_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def config_needs_server(driver_config):
+    """True unless the driver generates its own latency without a server.
+
+    Unreadable or unknown configs are assumed to need a server, so a typo in a
+    driver path can never silently skip the readiness probe.
+    """
+    return str(driver_config.get("driver_id", "")).lower() not in SERVERLESS_DRIVER_IDS
 
 
 def resolve_config_path(path_str):
@@ -436,13 +513,213 @@ def generate_driver_config(base_config_path, overrides):
 # Benchmark Execution
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def flush_server(server_host, port):
-    """Run redis-cli FLUSHALL on the server."""
+def resolve_cli_path(env=None, which=shutil.which, repo_root=REPO_ROOT):
+    """Resolve the CLI binary used for the readiness probe and FLUSHALL.
+
+    Resolution order:
+      1. $RESP_BENCH_CLI, used verbatim (explicit override).
+      2. work/<project>/bin/<project>-cli under the repo root — the binary the
+         Makefile builds — where <project> is $SERVER_PROJECT (default 'valkey').
+      3. <project>-cli on PATH.
+      4. valkey-cli, then redis-cli, on PATH.
+
+    Returns the resolved path as a string, or None if nothing usable was found.
+    """
+    env = os.environ if env is None else env
+
+    override = env.get(CLI_ENV_OVERRIDE)
+    if override:
+        return override
+
+    project = env.get(SERVER_PROJECT_ENV) or DEFAULT_SERVER_PROJECT
+    built = Path(repo_root) / "work" / project / "bin" / f"{project}-cli"
+    if built.is_file() and os.access(built, os.X_OK):
+        return str(built)
+
+    for name in dict.fromkeys([f"{project}-cli", "valkey-cli", "redis-cli"]):
+        found = which(name)
+        if found:
+            return found
+
+    return None
+
+
+def cli_connection_args(server_host, port, auth=None, tls=None):
+    """Build the connection flags for the CLI from a driver config's auth/tls."""
+    args = ["-h", str(server_host), "-p", str(port)]
+
+    auth = auth or {}
+    password = auth.get("password")
+    if password:
+        # --user needs -a, so username is only meaningful alongside a password.
+        args += ["--no-auth-warning", "-a", str(password)]
+        username = auth.get("username")
+        if username:
+            args += ["--user", str(username)]
+
+    tls = tls or {}
+    if tls.get("enabled"):
+        args.append("--tls")
+        for key, flag in (("ca_path", "--cacert"), ("cert_path", "--cert"), ("key_path", "--key")):
+            value = tls.get(key)
+            if value:
+                args += [flag, str(value)]
+        if not tls.get("verify_hostname", True):
+            args.append("--insecure")
+
+    return args
+
+
+def flush_server(cli_path, server_host, port, auth=None, tls=None):
+    """Run FLUSHALL on the server via the resolved CLI binary."""
     subprocess.run(
-        ["redis-cli", "-h", server_host, "-p", str(port), "flushall"],
+        [cli_path] + cli_connection_args(server_host, port, auth, tls) + ["flushall"],
         check=True,
         capture_output=True,
+        timeout=CLI_TIMEOUT_SECONDS,
     )
+
+
+def probe_server(cli_path, server_host, port, auth=None, tls=None,
+                 attempts=READINESS_ATTEMPTS, delay=READINESS_DELAY_SECONDS,
+                 sleep=time.sleep):
+    """PING the server with bounded retry.
+
+    Returns (ok, detail) where detail is the reply on success and the last
+    error seen on failure.
+    """
+    cmd = [cli_path] + cli_connection_args(server_host, port, auth, tls) + ["ping"]
+    attempts = max(1, attempts)
+    detail = "no attempt made"
+
+    for attempt in range(1, attempts + 1):
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=CLI_TIMEOUT_SECONDS)
+            stdout = (proc.stdout or "").strip()
+            stderr = (proc.stderr or "").strip()
+            if proc.returncode == 0 and "PONG" in stdout.upper():
+                return True, stdout
+            detail = stderr or stdout or f"exit code {proc.returncode}"
+        except (OSError, subprocess.SubprocessError) as e:
+            detail = str(e)
+
+        if attempt < attempts:
+            print(f"  server not ready (attempt {attempt}/{attempts}): {detail}",
+                  file=sys.stderr)
+            sleep(delay)
+
+    return False, detail
+
+
+def driver_server_settings(series_combos):
+    """Map each driver config path to its (auth, tls) pair, or None if serverless."""
+    settings = {}
+    for combo in series_combos:
+        path = combo["driver_config"]
+        if path in settings:
+            continue
+        cfg = read_driver_config(path)
+        if not config_needs_server(cfg):
+            settings[path] = None
+            continue
+        settings[path] = (cfg.get("auth") or {}, cfg.get("tls") or {})
+    return settings
+
+
+def non_standalone_modes(series_combos):
+    """Modes other than 'standalone' used by drivers that need a server.
+
+    The probe and FLUSHALL address one endpoint, which is all a standalone
+    server has. Cluster and sentinel matrices get a warning rather than a hard
+    failure, because a single-endpoint flush is what the runner always did.
+    """
+    modes = set()
+    for combo in series_combos:
+        cfg = read_driver_config(combo["driver_config"])
+        mode = str(cfg.get("mode", "standalone")).lower()
+        if config_needs_server(cfg) and mode != "standalone":
+            modes.add(mode)
+    return sorted(modes)
+
+
+def unique_server_credentials(settings):
+    """Distinct (auth, tls) pairs among the driver configs that need a server."""
+    unique, seen = [], set()
+    for value in settings.values():
+        if value is None:
+            continue
+        key = json.dumps(value, sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
+            unique.append(value)
+    return unique
+
+
+def preflight_server(settings, server_host, port, cli_path=None,
+                     attempts=READINESS_ATTEMPTS, delay=READINESS_DELAY_SECONDS):
+    """Resolve the CLI and probe the server before any benchmark work starts.
+
+    Returns the CLI path to use for per-cell flushes, or None when no driver in
+    this matrix needs a server (probe and flush are both skipped then).
+
+    Raises PreflightError if a server is needed but no CLI can be found or the
+    endpoint never answers PING — so the sweep fails up front instead of dying
+    on cell #1.
+    """
+    credentials = unique_server_credentials(settings)
+    if not credentials:
+        print("Preflight: no driver in this matrix needs a server "
+              "— skipping readiness probe and FLUSHALL")
+        return None
+
+    cli_path = cli_path or resolve_cli_path()
+    if cli_path is None:
+        project = os.environ.get(SERVER_PROJECT_ENV) or DEFAULT_SERVER_PROJECT
+        raise PreflightError(
+            f"no {project}-cli binary found. Looked for "
+            f"${CLI_ENV_OVERRIDE}, work/{project}/bin/{project}-cli (built by the "
+            f"Makefile's server targets), and {project}-cli/valkey-cli/redis-cli on "
+            f"PATH. Build the server binaries, install a CLI, or set "
+            f"${CLI_ENV_OVERRIDE} to its path."
+        )
+    print(f"Preflight: using CLI {cli_path}")
+
+    attempts = max(1, attempts)
+    for auth, tls in credentials:
+        label = f"{server_host}:{port}" + (" (tls)" if tls.get("enabled") else "")
+        ok, detail = probe_server(cli_path, server_host, port, auth, tls,
+                                  attempts=attempts, delay=delay)
+        if not ok:
+            raise PreflightError(
+                f"server at {label} did not answer PING after {attempts} "
+                f"attempt(s): {detail}"
+            )
+        print(f"Preflight: server ready at {label} ({detail})")
+
+    return cli_path
+
+
+def ndjson_size(path):
+    """Byte size of an append-only NDJSON file (0 if it does not exist)."""
+    path = Path(path)
+    return path.stat().st_size if path.exists() else 0
+
+
+def count_ndjson_lines(path, offset=0):
+    """Count non-blank NDJSON lines written after `offset` bytes.
+
+    Lines are counted rather than phase records: the schema may grow other
+    record kinds (e.g. interval reports), and any line at all proves the engine
+    produced output. Metrics files are append-only, so starting from the size
+    captured before a cell keeps this proportional to what that cell wrote.
+    """
+    path = Path(path)
+    if not path.exists():
+        return 0
+    with path.open() as f:
+        f.seek(offset)
+        return sum(1 for line in f if line.strip())
 
 
 def run_benchmark(server, driver_file, workload_file, metrics_output, env_overrides=None):
@@ -468,8 +745,116 @@ def run_benchmark(server, driver_file, workload_file, metrics_output, env_overri
 # Manifest
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def write_manifest(output_dir, config, series_combos):
-    """Write _manifest.json describing the matrix run."""
+def default_run_id():
+    """A UTC timestamp run id, e.g. 20260321T140322Z."""
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+
+def utc_timestamp():
+    """UTC timestamp in the same ISO form SystemMonitor writes, for correlation."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def existing_result_files(results_dir):
+    """Result files already present in a run directory."""
+    results_dir = Path(results_dir)
+    if not results_dir.is_dir():
+        return []
+    found = []
+    for pattern in RESULT_PATTERNS:
+        found.extend(sorted(results_dir.glob(pattern)))
+    return found
+
+
+def validate_run_id(run_id):
+    """Return run_id if it names a single directory, else raise ValueError."""
+    if not run_id or Path(run_id).name != run_id or run_id in (os.curdir, os.pardir):
+        raise ValueError(f"run id must be a single path segment, got {run_id!r}")
+    return run_id
+
+
+def prepare_results_dir(output_dir, run_id, resume=False, overwrite=False):
+    """Create <output-dir>/<run-id>/ and guard against silently merging runs.
+
+    Raises PreflightError if the directory already holds results and neither
+    resume nor overwrite was requested, so appending onto a previous run is
+    always a deliberate choice.
+    """
+    try:
+        validate_run_id(run_id)
+    except ValueError as e:
+        raise PreflightError(str(e)) from e
+
+    results_dir = Path(output_dir) / run_id
+    existing = existing_result_files(results_dir)
+    if existing:
+        if overwrite:
+            print(f"Overwriting {len(existing)} existing result file(s) in {results_dir}")
+            for path in existing:
+                path.unlink()
+        elif not resume:
+            names = ", ".join(p.name for p in existing[:5])
+            if len(existing) > 5:
+                names += f", … (+{len(existing) - 5} more)"
+            raise PreflightError(
+                f"{results_dir} already contains results ({names}). Metrics are "
+                f"appended, so writing here would merge two runs into one file. "
+                f"Use a new --run-id (the default is a UTC timestamp), --resume to "
+                f"append deliberately, or --overwrite to discard them."
+            )
+
+    results_dir.mkdir(parents=True, exist_ok=True)
+    return results_dir
+
+
+def failed_cells(cells):
+    """The cell records that did not complete successfully."""
+    return [c for c in cells if c.get("status") != "ok"]
+
+
+def update_latest_link(output_dir, run_id):
+    """Point <output-dir>/latest at this run's directory.
+
+    Called once the run is committed to starting, so a failed preflight leaves
+    the link on the previous good run. A --resume run repoints it at the run it
+    appended to, which is still the newest data.
+
+    Returns the link path, or None if the name is already taken by something
+    that is not a symlink — real files are never clobbered.
+    """
+    link = Path(output_dir) / LATEST_LINK_NAME
+    if link.exists() and not link.is_symlink():
+        print(f"WARNING: {link} is not a symlink, leaving it alone — point tooling "
+              f"at the run directory explicitly", file=sys.stderr)
+        return None
+
+    # Relative target, so the tree stays valid if --output-dir is moved.
+    staging = link.with_name(f".{LATEST_LINK_NAME}.tmp")
+    staging.unlink(missing_ok=True)
+    staging.symlink_to(run_id, target_is_directory=True)
+    os.replace(staging, link)  # atomic, also replaces a stale/dangling link
+    return link
+
+
+def summarize_cells(cells, planned):
+    """Count planned / attempted / succeeded / failed cells."""
+    failed = failed_cells(cells)
+    return {
+        "planned": planned,
+        "attempted": len(cells),
+        "succeeded": len(cells) - len(failed),
+        "failed": len(failed),
+    }
+
+
+def write_manifest(output_dir, config, series_combos, run_id=None, cells=None,
+                   summary=None, resumed=False):
+    """Write _manifest.json describing the matrix run.
+
+    `variants` keeps the shape generate_interactive_graphs.py reads for legend
+    labels. `cells` and `summary` describe what actually ran, and cover this
+    invocation only (a --resume run does not restate the earlier attempt).
+    """
     variants = {}
     for combo in series_combos:
         variant_info = {
@@ -488,8 +873,16 @@ def write_manifest(output_dir, config, series_combos):
         "iterations": config["iterations"],
         "variants": variants,
     }
+    if run_id is not None:
+        manifest["run_id"] = run_id
+    if resumed:
+        manifest["resumed"] = True
+    if summary is not None:
+        manifest["summary"] = summary
+    if cells is not None:
+        manifest["cells"] = cells
 
-    manifest_path = output_dir / "_manifest.json"
+    manifest_path = Path(output_dir) / "_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Wrote manifest: {manifest_path}")
 
@@ -498,8 +891,14 @@ def write_manifest(output_dir, config, series_combos):
 # Main Orchestration Loop
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_matrix(config, output_dir, server_host, port):
-    """Main orchestration loop: for each iteration × x_value × series_combo, run benchmark."""
+def run_matrix(config, output_dir, server_host, port, run_id=None, resume=False,
+               overwrite=False):
+    """Main orchestration loop: for each iteration × x_value × series_combo, run benchmark.
+
+    Returns the run summary (planned / attempted / succeeded / failed counts);
+    main() maps that to a process exit code. Raises PreflightError when the sweep
+    could not be started at all.
+    """
     dims = config["dimensions"]
     x_axis = config["x_axis"]
     x_values = dims[x_axis].values
@@ -512,10 +911,21 @@ def run_matrix(config, output_dir, server_host, port):
     # Generate series combos
     series_combos = generate_series_combos(config)
 
+    total_cells = len(x_values) * len(series_combos) * iterations
+    if total_cells <= 0:
+        raise PreflightError(
+            f"matrix produced no benchmark cells "
+            f"({x_axis}={len(x_values)} value(s) × {len(series_combos)} series × "
+            f"{iterations} iteration(s))"
+        )
+
+    run_id = run_id or default_run_id()
+
     print("=" * 70)
     print(f"Matrix Benchmark Run")
     print(f"  Description: {config['description']}")
     print(f"  Server:      {server}")
+    print(f"  Run id:      {run_id}")
     print(f"  X axis:      {x_axis} = {x_values}")
     print(f"  Series:      {len(series_combos)}")
     for combo in series_combos:
@@ -525,15 +935,29 @@ def run_matrix(config, output_dir, server_host, port):
         if combo['bindings']:
             print(f"      bindings: {combo['bindings']}")
     print(f"  Iterations:  {iterations}")
-    print(f"  Total runs:  {len(x_values) * len(series_combos) * iterations}")
+    print(f"  Total runs:  {total_cells}")
     print("=" * 70)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Preflight — refuse to start rather than dying part-way through the sweep
+    results_dir = prepare_results_dir(output_dir, run_id, resume=resume,
+                                      overwrite=overwrite)
+    print(f"Preflight: results dir {results_dir}")
+    server_settings = driver_server_settings(series_combos)
+    cli_path = preflight_server(server_settings, server_host, port)
+    for mode in non_standalone_modes(series_combos):
+        print(f"WARNING: driver mode '{mode}' — the readiness probe and FLUSHALL only "
+              f"cover {server}, not the other nodes of the topology", file=sys.stderr)
+
+    # Preflight passed — publish this run as the latest one
+    latest_link = update_latest_link(output_dir, run_id)
+    if latest_link:
+        print(f"Preflight: {latest_link} -> {run_id}")
 
     # Write manifest
-    write_manifest(output_dir, config, series_combos)
+    write_manifest(results_dir, config, series_combos, run_id=run_id, resumed=resume)
 
     # Create temp dir for generated configs
+    cells = []
     tmpdir = Path(tempfile.mkdtemp(prefix="resp-bench-matrix-"))
 
     try:
@@ -554,9 +978,6 @@ def run_matrix(config, output_dir, server_host, port):
 
                     print(f"\n=== iter={iteration}  {x_axis}={x_val}  "
                           f"series={label} ===")
-
-                    # Flush server
-                    flush_server(server_host, port)
 
                     # Generate workload
                     if x_axis == DIM_CONNECTIONS:
@@ -587,8 +1008,8 @@ def run_matrix(config, output_dir, server_host, port):
                         env_overrides.update(params[DIM_ENV])
 
                     # Output paths
-                    metrics_output = str(output_dir / f"{label}.ndjson")
-                    system_output = str(output_dir / f"{label}.system.ndjson")
+                    metrics_output = str(results_dir / f"{label}.ndjson")
+                    system_output = str(results_dir / f"{label}.system.ndjson")
 
                     # Prepare benchmark command
                     bench_env = os.environ.copy()
@@ -605,7 +1026,25 @@ def run_matrix(config, output_dir, server_host, port):
                         f"METRICS_OUTPUT={metrics_output}",
                     ]
 
+                    cell = {
+                        "iteration": iteration,
+                        "x_value": x_val,
+                        "label": label,
+                        "engine": engine,
+                        "metrics_output": Path(metrics_output).name,
+                        "started_at": utc_timestamp(),
+                        "status": "ok",
+                    }
+                    metrics_offset = ndjson_size(metrics_output)
+                    cell_started = time.monotonic()
+
                     try:
+                        # Flush the server inside the guarded region: a transient
+                        # flush failure costs this cell, not the whole sweep.
+                        settings = server_settings.get(driver_cfg_path)
+                        if cli_path is not None and settings is not None:
+                            flush_server(cli_path, server_host, port, *settings)
+
                         # Launch benchmark as subprocess, get its PGID for memory tracking
                         bench_proc = subprocess.Popen(
                             bench_cmd,
@@ -621,25 +1060,66 @@ def run_matrix(config, output_dir, server_host, port):
                         if bench_proc.returncode != 0:
                             raise subprocess.CalledProcessError(bench_proc.returncode, bench_cmd)
 
-                    except subprocess.CalledProcessError as e:
+                        # An engine can exit 0 and write nothing, so check that a
+                        # record actually landed instead of trusting the exit code.
+                        cell["records_written"] = count_ndjson_lines(metrics_output,
+                                                                    metrics_offset)
+                        if cell["records_written"] <= 0:
+                            raise CellFailure(
+                                f"engine exited 0 but wrote no metrics record to "
+                                f"{metrics_output}"
+                            )
+
+                    except (subprocess.SubprocessError, OSError, CellFailure) as e:
+                        cell["status"] = "failed"
+                        cell["error"] = describe_exception(e)
                         print(f"ERROR: Benchmark failed for {label} with "
-                              f"{x_axis}={x_val} (iter {iteration}): {e}",
+                              f"{x_axis}={x_val} (iter {iteration}): {cell['error']}",
                               file=sys.stderr)
+                    finally:
+                        cell["duration_seconds"] = round(time.monotonic() - cell_started, 3)
+                        cells.append(cell)
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+        # Rewrite the manifest even if the sweep aborted, so the recorded
+        # outcomes always match what was actually attempted.
+        summary = summarize_cells(cells, total_cells)
+        write_manifest(results_dir, config, series_combos, run_id=run_id, cells=cells,
+                       summary=summary, resumed=resume)
+
+    failed = failed_cells(cells)
 
     print("\n" + "=" * 70)
-    print("Matrix benchmark completed!")
-    print(f"Results in: {output_dir}")
+    if failed:
+        print(f"Matrix benchmark FAILED: {summary['failed']} of "
+              f"{summary['attempted']} cell(s) failed "
+              f"({summary['succeeded']} succeeded, {summary['planned']} planned)")
+        for cell in failed:
+            print(f"  - iter={cell['iteration']} {x_axis}={cell['x_value']} "
+                  f"series={cell['label']}: {cell['error']}", file=sys.stderr)
+    else:
+        print(f"Matrix benchmark completed: {summary['succeeded']} of "
+              f"{summary['planned']} cell(s) succeeded, 0 failed")
+    print(f"Results in: {results_dir}")
     print(f"Generate graphs with:")
-    print(f"  python scripts/generate_interactive_graphs.py {output_dir}")
+    print(f"  python scripts/generate_interactive_graphs.py {results_dir}")
     print("=" * 70)
+
+    return summary
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _run_id_arg(value):
+    """argparse adapter around validate_run_id, so typos read as usage errors."""
+    try:
+        return validate_run_id(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from e
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -664,6 +1144,12 @@ Examples:
       --matrix configs/matrices/valkey-glide-thread-sweep.json \\
       --output-dir /tmp/test \\
       --dry-run
+
+Exit codes:
+  0  every attempted cell succeeded
+  1  at least one cell failed (the sweep still ran to the end)
+  2  preflight failed — nothing was run (server unreachable, no CLI binary,
+     populated run directory, or a matrix with no cells)
 """,
     )
     parser.add_argument(
@@ -674,7 +1160,26 @@ Examples:
     parser.add_argument(
         "--output-dir", "-o",
         required=True,
-        help="Directory to write benchmark results",
+        help="Base directory for benchmark results; results land in <output-dir>/<run-id>/",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        type=_run_id_arg,
+        help="Name of this run's subdirectory under --output-dir "
+             "(default: UTC timestamp, e.g. 20260321T140322Z)",
+    )
+    populated = parser.add_mutually_exclusive_group()
+    populated.add_argument(
+        "--resume",
+        action="store_true",
+        help="Append into a run directory that already contains results "
+             "(does not skip cells an earlier attempt already completed)",
+    )
+    populated.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Delete existing results in the run directory before writing",
     )
     parser.add_argument(
         "--server-host",
@@ -733,9 +1238,20 @@ def main():
                 print(f"    params: {json.dumps(combo['params'], indent=6)}")
             if combo['bindings']:
                 print(f"    bindings: {combo['bindings']}")
+        run_id = args.run_id or default_run_id()
+        server_settings = driver_server_settings(series_combos)
+        needs_server = any(v is not None for v in server_settings.values())
+        total_cells = len(x_values) * len(series_combos) * config["iterations"]
+
         print(f"\n  Iterations:  {config['iterations']}")
-        print(f"  Total runs:  {len(x_values) * len(series_combos) * config['iterations']}")
-        print(f"  Output:      {output_dir}")
+        print(f"  Total runs:  {total_cells}")
+        if total_cells <= 0:
+            print("  WARNING: this matrix has no cells — a real run would exit "
+                  f"{EXIT_PREFLIGHT} without running anything", file=sys.stderr)
+        print(f"  Output:      {output_dir / run_id}")
+        print(f"  Server needed: {needs_server}")
+        if needs_server:
+            print(f"  CLI (flush/probe): {resolve_cli_path() or 'NOT FOUND'}")
 
         # Show per-x-value resolution for all series with bindings
         for combo in series_combos:
@@ -751,7 +1267,16 @@ def main():
         print("\n" + "=" * 70)
         return
 
-    run_matrix(config, output_dir, server_host, port)
+    try:
+        summary = run_matrix(
+            config, output_dir, server_host, port,
+            run_id=args.run_id, resume=args.resume, overwrite=args.overwrite,
+        )
+    except PreflightError as e:
+        print(f"\nERROR: preflight failed, no benchmarks were run: {e}", file=sys.stderr)
+        sys.exit(EXIT_PREFLIGHT)
+
+    sys.exit(EXIT_CELL_FAILURES if summary["failed"] else EXIT_OK)
 
 
 if __name__ == "__main__":

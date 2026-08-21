@@ -403,6 +403,10 @@ config-editor-dev:
 
 MATRIX?=configs/matrices/driver-comparison-high-tps.json
 GRAPHS_DIR?=graphs/interactive/
+# Results live in $(OUTPUT_DIR)/<run-id>/; the orchestrator points 'latest' at
+# the most recent run. Override RUN_ID to graph a specific run.
+RUN_ID?=latest
+MATRIX_RESULTS_DIR=$(OUTPUT_DIR)/$(RUN_ID)
 
 benchmark-matrix: java-build
 	python scripts/run_benchmark_matrix.py \
@@ -417,8 +421,10 @@ benchmark-matrix-dry-run:
 		--dry-run
 
 benchmark-matrix-graphs:
+	@test -n "$(OUTPUT_DIR)" || { echo "ERROR: OUTPUT_DIR is required, e.g. make benchmark-matrix-graphs OUTPUT_DIR=results/my-run" >&2; exit 1; }
+	@test -d "$(MATRIX_RESULTS_DIR)" || { echo "ERROR: $(MATRIX_RESULTS_DIR) is not a directory — no run has completed in $(OUTPUT_DIR), or 'latest' is stale. Run 'make benchmark-matrix OUTPUT_DIR=$(OUTPUT_DIR)' or pass RUN_ID=<run-id>." >&2; exit 1; }
 	python scripts/generate_interactive_graphs.py \
-		$(OUTPUT_DIR) \
+		$(MATRIX_RESULTS_DIR) \
 		--output $(GRAPHS_DIR)
 
 # ============================================================================
