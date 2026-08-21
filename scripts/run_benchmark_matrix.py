@@ -205,6 +205,54 @@ def parse_matrix_config(matrix_path):
     if not config["workload_template"]:
         raise ValueError("'workload_template' is required in matrix config")
 
+    # Referenced config files must exist. Without this, a typo'd path only
+    # surfaces mid-run — after the server is up and the engine is built — and
+    # --dry-run reports success because the files are never opened. Worse,
+    # detect_engine_for_driver() swallows the resulting OSError and falls back
+    # to "java", so a bad path can silently benchmark the wrong engine.
+    repo_root = Path(__file__).resolve().parent.parent
+
+    def resolve_referenced_path(path_str):
+        """Return the path the run should use, or None if it does not exist.
+
+        Callers open these paths as written, i.e. relative to the CWD. Matrix
+        configs spell them relative to the repository root, so fall back to that
+        and hand back the resolved path — validation and execution have to agree
+        on one path, otherwise validating here proves nothing about the run.
+        """
+        as_written = Path(path_str)
+        if as_written.is_file():
+            return path_str
+        if not as_written.is_absolute() and (repo_root / as_written).is_file():
+            return str(repo_root / as_written)
+        return None
+
+    missing = []
+
+    resolved = resolve_referenced_path(config["workload_template"])
+    if resolved is None:
+        missing.append(f"workload_template: {config['workload_template']}")
+    else:
+        config["workload_template"] = resolved
+
+    driver_dim = dimensions[DIM_DRIVER_CONFIG]
+    driver_values = list(driver_dim.values)
+    for i, value in enumerate(driver_values):
+        if not isinstance(value, str) or value.startswith("$"):
+            continue
+        resolved = resolve_referenced_path(value)
+        if resolved is None:
+            missing.append(f"{DIM_DRIVER_CONFIG}: {value}")
+        else:
+            driver_values[i] = resolved
+    driver_dim.values = driver_values
+
+    if missing:
+        raise ValueError(
+            f"matrix config '{matrix_path}' references files that do not exist:\n  "
+            + "\n  ".join(missing)
+        )
+
     return config
 
 

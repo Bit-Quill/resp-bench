@@ -175,6 +175,43 @@ class TestConfigParsing:
         with pytest.raises(ValueError, match="nonexistent"):
             parse_matrix_config(p)
 
+    def test_missing_workload_template_file_raises(self, tmp_path):
+        config = {
+            "x_axis": "connections",
+            "workload_template": "configs/workloads/reference/no-such-workload.json",
+            "dimensions": {
+                "connections": [1],
+                "driver_config": ["configs/drivers/high-throughput/jedis.json"],
+            },
+        }
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match="no-such-workload.json"):
+            parse_matrix_config(p)
+
+    def test_missing_driver_config_file_raises(self, tmp_path):
+        config = {
+            "x_axis": "connections",
+            "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+            "dimensions": {
+                "connections": [1],
+                "driver_config": ["configs/drivers/high-throughput/no-such-driver.json"],
+            },
+        }
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match="no-such-driver.json"):
+            parse_matrix_config(p)
+
+    def test_referenced_paths_are_openable_after_parse(self, simple_matrix):
+        # Repo-root-relative paths must survive parsing as something the run can
+        # actually open from the current CWD — validating a path the runner then
+        # fails to open would defeat the check.
+        config = parse_matrix_config(simple_matrix)
+        assert Path(config["workload_template"]).is_file()
+        for driver in config["dimensions"]["driver_config"].values:
+            assert Path(driver).is_file()
+
 
 class TestSeriesComboGeneration:
     def test_single_driver_no_series_dims(self, simple_matrix):

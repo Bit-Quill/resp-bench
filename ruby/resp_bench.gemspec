@@ -25,7 +25,9 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency "redis", "~> 5.0"
-  spec.add_dependency "valkey", "~> 0.1"
+  # valkey-glide-ruby publishes as "valkey-glide-rb"; the exact revision is
+  # pinned in the Gemfile (the "valkey" gem on RubyGems is a different project).
+  spec.add_dependency "valkey-glide-rb", "~> 1.0"
   spec.add_dependency "async", "~> 2.6"
   spec.add_dependency "async-redis", "~> 0.8"
   spec.add_dependency "HDRHistogram", "~> 0.1"
