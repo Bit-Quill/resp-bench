@@ -3,6 +3,10 @@
 A multi-language benchmark suite for RESP protocol (Redis/Valkey) compatible databases and client libraries, with a matrix-based orchestration layer for multi-dimensional parameter sweeps and interactive graph generation.
 
 > 📐 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture diagram and component details.
+>
+> ☁️ Want numbers without setting up a host? See [infra/](infra/README.md) for
+> fire-and-forget benchmarking on AWS: one command provisions an EC2 instance,
+> runs a sweep, publishes the report to S3, and self-terminates.
 
 ## Quick Start
 
