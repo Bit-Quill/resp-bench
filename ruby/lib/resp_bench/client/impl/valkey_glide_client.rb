@@ -76,11 +76,7 @@ module RespBench
         end
 
         def driver_version
-          # The Gemfile pins an exact released version of valkey-glide-rb, so the
-          # gem's own VERSION constant identifies the driver under measurement.
-          # (This used to look up a git-sourced spec named "valkey" to report a
-          # commit SHA; that gem name was never published by
-          # valkey-io/valkey-glide-ruby, so the lookup could not have matched.)
+          # The Gemfile pins an exact released version of valkey-glide-rb.
           Valkey::VERSION
         end
 

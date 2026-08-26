@@ -10,18 +10,9 @@ gem "HDRHistogram", "~> 0.1"    # HdrHistogram for latency metrics
 gem "oj", "~> 3.16"             # Fast JSON serialization
 gem "concurrent-ruby", "~> 1.2" # Thread-safe data structures
 
-# valkey-glide-ruby client (drop-in replacement for redis-rb; supplies the
-# `Valkey` class via `require "valkey"`). Pinned to an exact released version
-# instead of a moving branch, so two runs a week apart benchmark the same
-# driver code. Bump deliberately.
-#
-#   - valkey-io/valkey-glide-ruby publishes as "valkey-glide-rb". The "valkey"
-#     gem on RubyGems is an unrelated third-party project, so the previous
-#     `gem "valkey", github: ...` never resolved against that git source.
-#   - Use the released gem, not a git ref: the prebuilt FFI libraries under
-#     lib/valkey/native/ are produced by the gem's release pipeline and are not
-#     in the git tree, so a git checkout cannot load.
-gem "valkey-glide-rb", "1.0.0" # == tag v1.0.0 (356e229)
+# valkey-glide-ruby client; supplies the `Valkey` class via `require "valkey"`.
+# Pinned to an exact released version for reproducible benchmark runs.
+gem "valkey-glide-rb", "1.0.0"
 
 group :development, :test do
   gem "minitest", "~> 5.0"
