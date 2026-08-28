@@ -10,7 +10,9 @@ gem "HDRHistogram", "~> 0.1"    # HdrHistogram for latency metrics
 gem "oj", "~> 3.16"             # Fast JSON serialization
 gem "concurrent-ruby", "~> 1.2" # Thread-safe data structures
 
-gem "valkey", github: "valkey-io/valkey-glide-ruby", branch: "main"  # valkey-glide-ruby client (drop-in replacement for redis-rb)
+# valkey-glide-ruby client; supplies the `Valkey` class via `require "valkey"`.
+# Pinned to an exact released version for reproducible benchmark runs.
+gem "valkey-glide-rb", "1.0.0"
 
 group :development, :test do
   gem "minitest", "~> 5.0"

@@ -1,0 +1,11 @@
+# Python dependencies for scripts.
+#
+#   python -m pip install -r scripts/requirements.txt
+#
+# Direct dependencies are pinned exactly so each run resolves the same versions;
+# transitive dependencies still float (fully locking them needs a compiled lockfile).
+#
+# numpy is held below 2.5 because 2.5.x requires Python >= 3.12 and
+# .github/workflows/benchmark.yml runs Python 3.11.
+matplotlib==3.11.1
+numpy==2.4.6

@@ -1,7 +1,7 @@
 {
     "description": "Valkey-Glide basic example for small connection scaling",
     "x_axis": "connections",
-    "workload_template": "configs/workloads/reference/basic-standalone-single-client-10M-secs.json",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-10-secs.json",
     "iterations": 5,
     "dimensions": {
         "connections": [
