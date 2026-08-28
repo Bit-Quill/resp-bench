@@ -15,8 +15,9 @@ Java implementation of the resp-bench benchmark suite.
 
 ## Requirements
 
-- Java 17 or later
-- Maven 3.6 or later
+- Java 21 or later, to build and to run — the engine uses virtual threads
+  (`Executors.newVirtualThreadPerTaskExecutor()`), and the jar is compiled for Java 21
+- Maven 3.6.3 or later
 
 ## Building
 

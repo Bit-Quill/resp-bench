@@ -13,9 +13,14 @@
     <description>Benchmark engine for Java Valkey/Redis client libraries</description>
 
     <properties>
-        <java.version>17</java.version>
-        <maven.compiler.source>${java.version}</maven.compiler.source>
-        <maven.compiler.target>${java.version}</maven.compiler.target>
+        <!--
+            Java 21 is required, not merely preferred: the engine uses virtual threads
+            (Executors.newVirtualThreadPerTaskExecutor()). Use `release` rather than the
+            `source`/`target` pair so javac validates against the Java 21 class library
+            instead of whichever JDK happens to be running the build.
+        -->
+        <java.version>21</java.version>
+        <maven.compiler.release>${java.version}</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Driver versions - orchestrator can update these -->
@@ -170,6 +175,29 @@
             </resource>
         </resources>
         <plugins>
+            <!-- Fail fast with an actionable message when the build JDK is older than 21. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>enforce-java-21</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[${java.version},)</version>
+                                    <message>resp-bench requires JDK ${java.version} or newer: the Java engine uses virtual threads (Executors.newVirtualThreadPerTaskExecutor()).</message>
+                                </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <!-- Git Commit ID Plugin - generates git.properties with commit info -->
             <plugin>
                 <groupId>io.github.git-commit-id</groupId>
@@ -204,8 +232,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
                 <configuration>
-                    <source>${java.version}</source>
-                    <target>${java.version}</target>
+                    <release>${java.version}</release>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>info.picocli</groupId>
