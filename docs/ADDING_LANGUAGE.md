@@ -294,13 +294,25 @@ python-build:
 python-test:
 	cd python && pytest
 
+PYTHON_RUN_CMD=python -m resp_bench \
+	--server $(SERVER) \
+	--driver $(DRIVER) \
+	--workload $(WORKLOAD) \
+	--metrics $(METRICS_OUTPUT)
+
 python-run: python-build
-	python -m resp_bench \
-		--server $(SERVER) \
-		--driver $(DRIVER) \
-		--workload $(WORKLOAD) \
-		--metrics $(METRICS_OUTPUT)
+	$(PYTHON_RUN_CMD)
+
+python-run-nobuild:
+	$(PYTHON_RUN_CMD)
 ```
+
+Both run targets are required. The matrix orchestrator builds each engine once
+per sweep and then invokes `<engine>-run-nobuild` per cell, so an engine that
+only defines `<engine>-run` either rebuilds on every cell or — once its
+`driver_id` is registered in `DRIVER_ENGINE_MAP` — fails every cell with
+`No rule to make target`. See
+[BENCHMARK_MATRIX.md](BENCHMARK_MATRIX.md#engine-builds--once-per-sweep).
 
 ### 11. Implement Client Drivers
 
@@ -395,7 +407,7 @@ Before submitting a new language engine:
 - [ ] All unit tests pass
 - [ ] Integration tests pass against live server
 - [ ] Documentation complete
-- [ ] Makefile targets work correctly
+- [ ] Makefile targets work correctly, including `<engine>-run-nobuild`
 
 ## Cross-Language Validation
 

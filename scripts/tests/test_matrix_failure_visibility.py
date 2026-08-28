@@ -466,9 +466,15 @@ def stub_engine(monkeypatch, returncode=0, records_written=0):
 
     Only `make <engine>-run` invocations are stubbed; anything else (the CLI used
     by the readiness probe) still runs for real.
+
+    The once-per-sweep engine build (`build_engines`, which shells `make
+    <engine>-build`) is stubbed to a no-op here — these tests exercise run_matrix
+    outcomes, and the build step is covered separately in test_engine_build.py.
     """
     calls = []
     real_popen = subprocess.Popen
+
+    monkeypatch.setattr("run_benchmark_matrix.build_engines", lambda engines: None)
 
     def fake_popen(cmd, **kwargs):
         metrics_args = [a for a in cmd if str(a).startswith("METRICS_OUTPUT=")]

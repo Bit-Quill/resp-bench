@@ -38,6 +38,19 @@ make benchmark-matrix-graphs OUTPUT_DIR=results/glide-sweep
 make benchmark-matrix-graphs OUTPUT_DIR=results/glide-sweep RUN_ID=20260321T140322Z
 ```
 
+## Engine Builds — Once Per Sweep
+
+Before the sweep starts, the orchestrator resolves the engine behind every `driver_config` (via the driver's `driver_id`) and runs `make <engine>-build` **once for each engine the matrix actually needs**. A Java-only matrix builds Java only; a mixed matrix builds Java, Ruby and C#. If a build fails the run aborts immediately, rather than failing every cell.
+
+Individual cells then execute `make <engine>-run-nobuild`, which runs the already-built engine without rebuilding it. This matters because sweeps are large — `driver-comparison-high-tps` is 720 cells — and `*-build` is not incremental (`mvn clean package`, `bundle install`, `dotnet build -c Release`).
+
+| Target | Behavior |
+|--------|----------|
+| `make java-run` / `ruby-run` / `csharp-run` | Build, then run. Unchanged — the right target for one-off manual runs. |
+| `make java-run-nobuild` / `ruby-run-nobuild` / `csharp-run-nobuild` | Run only. Assumes the engine is already built; used by the matrix orchestrator. |
+
+`make benchmark-matrix` no longer pre-builds Java itself, since the orchestrator builds exactly the engines the chosen matrix requires.
+
 ## Matrix Config Format
 
 Matrix configs live in `configs/matrices/` and define **dimensions** to sweep:
@@ -234,4 +247,4 @@ python scripts/run_benchmark_matrix.py --help
 
 `GLIDE_TOKIO_WORKER_THREADS` and `GLIDE_CALLBACK_WORKER_THREADS` are **process-level environment variables** consumed by the native Rust/Tokio runtime inside the valkey-glide JAR. They are read once when `GlideClient.createClient()` first initializes the process-wide Tokio runtime, and cannot be changed afterward.
 
-Because the matrix runner launches each benchmark as a separate JVM process (via `make java-run`), different env var values can be set per run. These are specified in the matrix config's `env` dimension, NOT in the driver config JSON.
+Because the matrix runner launches each benchmark as a separate JVM process (via `make java-run-nobuild`), different env var values can be set per run. These are specified in the matrix config's `env` dimension, NOT in the driver config JSON.

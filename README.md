@@ -198,11 +198,17 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 
 | Target | Description |
 |--------|-------------|
-| `make java-run` | Run Java engine (DRIVER, WORKLOAD, SERVER) |
-| `make ruby-run` | Run Ruby engine (DRIVER, WORKLOAD, SERVER) |
-| `make csharp-run` | Run C# engine (DRIVER, WORKLOAD, SERVER) |
+| `make java-run` | Build, then run Java engine (DRIVER, WORKLOAD, SERVER) |
+| `make ruby-run` | Build, then run Ruby engine (DRIVER, WORKLOAD, SERVER) |
+| `make csharp-run` | Build, then run C# engine (DRIVER, WORKLOAD, SERVER) |
+| `make java-run-nobuild` | Run Java engine without rebuilding (used by the matrix orchestrator) |
+| `make ruby-run-nobuild` | Run Ruby engine without re-running `bundle install` |
+| `make csharp-run-nobuild` | Run C# engine without rebuilding |
 | `make java-build` | Build Java JAR |
+| `make ruby-build` | Install Ruby dependencies |
 | `make csharp-build` | Build C# executable |
+
+The matrix orchestrator builds each engine the matrix needs once per sweep and then uses the `*-run-nobuild` targets per cell — see [docs/BENCHMARK_MATRIX.md](docs/BENCHMARK_MATRIX.md#engine-builds--once-per-sweep).
 
 ### Server Management
 
