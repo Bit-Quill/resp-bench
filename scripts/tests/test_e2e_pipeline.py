@@ -26,19 +26,27 @@ from pathlib import Path
 # Project root (repo root, not scripts/)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+# Fixed run id so tests know which subdirectory of --output-dir holds the results
+E2E_RUN_ID = "e2e"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_matrix(matrix_config, output_dir):
-    """Run the benchmark matrix orchestrator (real execution, not dry-run)."""
+def run_matrix(matrix_config, base_dir):
+    """Run the benchmark matrix orchestrator (real execution, not dry-run).
+
+    The orchestrator isolates each run, so results land in
+    <base_dir>/<E2E_RUN_ID>/ rather than directly in base_dir.
+    """
     result = subprocess.run(
         [
             sys.executable,
             str(PROJECT_ROOT / "scripts" / "run_benchmark_matrix.py"),
             "--matrix", str(matrix_config),
-            "--output-dir", str(output_dir),
+            "--output-dir", str(base_dir),
+            "--run-id", E2E_RUN_ID,
             "--server-host", "localhost",  # recording client ignores this
         ],
         cwd=str(PROJECT_ROOT),
@@ -144,8 +152,9 @@ class TestSingleDriverE2E:
 
     def test_engine_produces_ndjson_with_correct_values(self, java_jar, tmp_path):
         """Run engine → verify NDJSON has expected request count, latency, connections."""
-        output_dir = tmp_path / "results"
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-single.json", output_dir)
+        base_dir = tmp_path / "results"
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-single.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0, f"Matrix run failed: {result.stderr[:500]}"
 
         # Should produce one NDJSON file for the single variant
@@ -176,10 +185,11 @@ class TestSingleDriverE2E:
 
     def test_graph_rps_matches_ndjson(self, java_jar, tmp_path):
         """Run engine → graph → verify graph RPS data points match NDJSON values."""
-        output_dir = tmp_path / "results"
+        base_dir = tmp_path / "results"
         graph_dir = tmp_path / "graphs"
 
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-single.json", output_dir)
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-single.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0
 
         result = run_graph_generator(output_dir, graph_dir)
@@ -219,10 +229,11 @@ class TestSingleDriverE2E:
 
     def test_graph_latency_matches_ndjson(self, java_jar, tmp_path):
         """Run engine → graph → verify graph latency p50 matches NDJSON values."""
-        output_dir = tmp_path / "results"
+        base_dir = tmp_path / "results"
         graph_dir = tmp_path / "graphs"
 
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-single.json", output_dir)
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-single.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0
 
         result = run_graph_generator(output_dir, graph_dir)
@@ -257,8 +268,9 @@ class TestSingleDriverE2E:
 
     def test_system_metrics_during_run(self, java_jar, tmp_path):
         """Run engine → verify .system.ndjson has plausible CPU and memory readings."""
-        output_dir = tmp_path / "results"
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-single.json", output_dir)
+        base_dir = tmp_path / "results"
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-single.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0
 
         system_files = list(output_dir.glob("*.system.ndjson"))
@@ -293,8 +305,9 @@ class TestMultiVariantE2E:
 
     def test_fast_variant_has_higher_rps(self, java_jar, tmp_path):
         """Fast (10ms) recording client should have ~10x more RPS than slow (100ms)."""
-        output_dir = tmp_path / "results"
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", output_dir)
+        base_dir = tmp_path / "results"
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0
 
         ndjson_files = sorted([
@@ -319,8 +332,9 @@ class TestMultiVariantE2E:
 
     def test_slow_variant_has_higher_latency(self, java_jar, tmp_path):
         """Slow (100ms) recording client should have ~10x higher p50 latency."""
-        output_dir = tmp_path / "results"
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", output_dir)
+        base_dir = tmp_path / "results"
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0
 
         ndjson_files = sorted([
@@ -342,10 +356,11 @@ class TestMultiVariantE2E:
 
     def test_graph_has_two_series(self, java_jar, tmp_path):
         """Graph should have 2 series in the scalability chart."""
-        output_dir = tmp_path / "results"
+        base_dir = tmp_path / "results"
         graph_dir = tmp_path / "graphs"
 
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", output_dir)
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0
 
         result = run_graph_generator(output_dir, graph_dir)
@@ -360,10 +375,11 @@ class TestMultiVariantE2E:
 
     def test_graph_rps_ordering_matches_ndjson(self, java_jar, tmp_path):
         """Graph should show fast variant with higher RPS than slow variant."""
-        output_dir = tmp_path / "results"
+        base_dir = tmp_path / "results"
         graph_dir = tmp_path / "graphs"
 
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", output_dir)
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0
 
         result = run_graph_generator(output_dir, graph_dir)
@@ -386,8 +402,9 @@ class TestManifestE2E:
     """Verify _manifest.json is correct after a real matrix run."""
 
     def test_manifest_has_correct_variants(self, java_jar, tmp_path):
-        output_dir = tmp_path / "results"
-        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", output_dir)
+        base_dir = tmp_path / "results"
+        result = run_matrix(PROJECT_ROOT / "configs/test/matrices/matrix-e2e-multi.json", base_dir)
+        output_dir = base_dir / E2E_RUN_ID
         assert result.returncode == 0
 
         manifest_path = output_dir / "_manifest.json"

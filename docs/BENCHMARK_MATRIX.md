@@ -13,15 +13,16 @@ python scripts/run_benchmark_matrix.py \
     --output-dir results/valkey-glide-sweep \
     --dry-run
 
-# Run the matrix benchmark
+# Run the matrix benchmark (results land in results/valkey-glide-sweep/<run-id>/)
 python scripts/run_benchmark_matrix.py \
     --matrix configs/matrices/valkey-glide-thread-sweep.json \
     --output-dir results/valkey-glide-sweep \
+    --run-id first-try \
     --server-host 10.0.0.5
 
-# Generate interactive graphs from results
+# Generate interactive graphs from one run's results
 python scripts/generate_interactive_graphs.py \
-    results/valkey-glide-sweep/ \
+    results/valkey-glide-sweep/first-try/ \
     --output graphs/interactive/valkey-glide-sweep/
 ```
 
@@ -30,6 +31,11 @@ Or via Makefile:
 make benchmark-matrix-dry-run MATRIX=configs/matrices/valkey-glide-thread-sweep.json
 make benchmark-matrix MATRIX=configs/matrices/valkey-glide-thread-sweep.json \
     OUTPUT_DIR=results/glide-sweep SERVER_HOST=10.0.0.5
+
+# Graphs for the run that just finished (follows OUTPUT_DIR/latest)
+make benchmark-matrix-graphs OUTPUT_DIR=results/glide-sweep
+# ...or for a specific run
+make benchmark-matrix-graphs OUTPUT_DIR=results/glide-sweep RUN_ID=20260321T140322Z
 ```
 
 ## Matrix Config Format
@@ -136,19 +142,77 @@ Non-matching drivers skip the dimension entirely, avoiding wasted benchmark time
 
 ## Output Format
 
-The matrix runner produces a **flat directory**:
+The matrix runner produces a **flat directory per run**, under `<output-dir>/<run-id>/`:
 
 ```
 results/glide-sweep/
-    spring-data-valkey-glide@cb=8,tw=8,pool_size=connections.ndjson
-    spring-data-valkey-glide@cb=16,tw=16,pool_size=connections.ndjson
-    *.cpu.ndjson                    # CPU samples per variant
-    _manifest.json                  # Maps labels → config metadata
+    20260321T140322Z/
+        spring-data-valkey-glide@cb=8,tw=8,pool_size=connections.ndjson
+        spring-data-valkey-glide@cb=16,tw=16,pool_size=connections.ndjson
+        *.cpu.ndjson                # CPU samples per variant
+        _manifest.json              # Maps labels → config metadata + per-cell outcomes
+    latest -> 20260321T140322Z      # symlink to the most recent successful start
 ```
+
+The run id defaults to a UTC timestamp, so two runs into the same `--output-dir`
+never merge into the same NDJSON files. Pass `--run-id` to name a run yourself;
+if that run directory already holds results, the run is refused unless you pass
+`--resume` (append deliberately) or `--overwrite` (discard them first). Point the
+graph generator at the run directory, not at `--output-dir`.
+
+Once preflight passes, the orchestrator repoints `<output-dir>/latest` at the
+current run, so tooling can find the newest results without knowing the run id
+(`--resume` repoints it at the run being appended to). A failed preflight leaves
+the link on the previous run, and a `latest` that is a real directory rather than
+a symlink is never touched.
 
 Each `.ndjson` file contains STEADY phase records for ALL connection counts (multiple iterations each). The NDJSON format is identical to what the benchmark engine produces — no changes to the output schema.
 
-The `_manifest.json` records the full configuration for each variant, enabling the graph generator to build rich legend labels.
+The `_manifest.json` records the full configuration for each variant, enabling the graph generator to build rich legend labels. It also records what actually ran:
+
+```json
+{
+  "run_id": "20260321T140322Z",
+  "variants": { "...": {} },
+  "summary": {"planned": 6, "attempted": 6, "succeeded": 5, "failed": 1},
+  "cells": [
+    {
+      "iteration": 1, "x_axis": "connections", "x_value": 4,
+      "label": "jedis", "driver_config": "configs/drivers/default/jedis.json",
+      "engine": "java", "metrics_output": "jedis.ndjson",
+      "started_at": "2026-03-21T14:03:22Z", "status": "ok",
+      "records_written": 1, "duration_seconds": 41.2
+    }
+  ]
+}
+```
+
+A cell counts as failed if the engine exits non-zero, if the pre-cell FLUSHALL
+fails, or if the engine exits 0 but writes no new metrics record.
+
+## Server Preconditions
+
+Before the first benchmark runs, the orchestrator resolves a CLI binary and
+PINGs the server with bounded retry, so an unreachable endpoint fails up front
+instead of aborting mid-sweep. The CLI is resolved in this order:
+
+1. `$RESP_BENCH_CLI`
+2. `work/<project>/bin/<project>-cli` — the binary the Makefile builds, where
+   `<project>` is `$SERVER_PROJECT` (default `valkey`)
+3. `<project>-cli`, then `valkey-cli`, then `redis-cli` on `PATH`
+
+Auth and TLS settings from the driver config (`auth.username`, `auth.password`,
+`tls.*`) are passed to the probe and to the per-cell FLUSHALL. Matrices built
+only from serverless drivers (`driver_id: "recording"`) skip both the probe and
+the flush entirely.
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Every attempted cell succeeded |
+| 1 | At least one cell failed (the sweep still ran to the end) |
+| 2 | Preflight failed and nothing ran: server unreachable, no CLI binary, populated run directory, or a matrix with no cells |
 
 ## CLI Reference
 
@@ -156,7 +220,10 @@ The `_manifest.json` records the full configuration for each variant, enabling t
 python scripts/run_benchmark_matrix.py --help
 
   --matrix, -m        Path to matrix configuration JSON file (required)
-  --output-dir, -o    Directory to write benchmark results (required)
+  --output-dir, -o    Base directory for results; results land in <output-dir>/<run-id>/ (required)
+  --run-id            Name of this run's subdirectory (default: UTC timestamp)
+  --resume            Allow appending into a run directory that already has results
+  --overwrite         Delete existing results in the run directory first
   --server-host       Server hostname (overrides matrix config)
   --port              Server port (overrides matrix config)
   --iterations        Override iterations from matrix config

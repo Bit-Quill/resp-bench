@@ -10,6 +10,11 @@ A multi-language benchmark suite for RESP protocol (Redis/Valkey) compatible dat
 
 - Python 3.8+, Java 21+, Maven
 - Make
+- A server CLI (`valkey-cli`) for the matrix runner's readiness probe and per-cell
+  FLUSHALL — the Makefile's `server-*` targets build one into
+  `work/<SERVER_PROJECT>/bin/`, or any `valkey-cli`/`redis-cli` on `PATH` is used.
+  Set `RESP_BENCH_CLI` to point at a specific binary. Not needed for matrices that
+  only use the serverless `recording` driver.
 
 ### 1. Run a Benchmark Matrix
 
@@ -25,16 +30,21 @@ make server-standalone-start
 python scripts/run_benchmark_matrix.py \
     --matrix configs/matrices/driver-comparison-high-tps.json \
     --output-dir results/my-run \
+    --run-id first-try \
     --server-host localhost
+# Results land in results/my-run/<run-id>/ (--run-id defaults to a UTC timestamp).
+# Exit code: 0 = all cells ran, 1 = some cell failed, 2 = preflight failed.
 ```
 
 ### 2. Generate Interactive Graphs
 
 ```bash
 python scripts/generate_interactive_graphs.py \
-    results/my-run/ \
+    results/my-run/first-try/ \
     --output graphs/interactive/my-run/ \
     --title "My Benchmark Run"
+# Or, for whichever run finished most recently:
+#   make benchmark-matrix-graphs OUTPUT_DIR=results/my-run
 # Open graphs/interactive/my-run/scalability_and_delta.html in a browser
 ```
 
