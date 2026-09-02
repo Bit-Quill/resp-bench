@@ -1,67 +1,60 @@
 # resp-bench Python Engine
 
-🚧 **This engine is planned but not yet implemented.**
+Python implementation of the resp-bench benchmark suite, at parity with the
+Java (reference), Ruby, and C# engines.
 
-## Overview
+## Supported Drivers
 
-Python implementation of the resp-bench benchmark suite.
+| Driver | `driver_id` | Package | Notes |
+|--------|-------------|---------|-------|
+| Valkey GLIDE | `valkey-glide-python` | `valkey-glide` (`import glide`) | Async client |
+| redis-py | `redis-py` | `redis` (`redis.asyncio`) | Async client |
+| valkey-py | `valkey-py` | `valkey` (`valkey.asyncio`) | Async client (Valkey fork of redis-py) |
+| Recording | `recording` | — | In-memory; for server-free tests |
 
-## Planned Drivers
+> The GLIDE `driver_id` is `valkey-glide-python` (not the bare `valkey-glide`,
+> which is the Java driver) — matching the `valkey-glide-ruby` /
+> `valkey-glide-csharp` convention.
 
-| Driver | Package | Status |
-|--------|---------|--------|
-| redis-py | `redis` | 📋 Planned |
-| redis-py-async | `redis[hiredis]` | 📋 Planned |
-| valkey-glide | `valkey-glide` | 📋 Planned |
+## Execution model
 
-## Planned Features
+The engine is asyncio-based. For a phase with `connections = N`, it creates
+**N client instances** (one client per connection — the `client == connection`
+invariant shared by every engine) and runs **N worker coroutines** concurrently
+on a single event loop. Each worker awaits one command at a time, i.e.
+`pipeline_depth = 1` — the faithful async analogue of the Java/Ruby
+"one in-flight request per connection" model, keeping results comparable across
+engines.
 
-- Full parity with Java engine
-- Async/await based execution using `asyncio`
-- HdrHistogram for latency collection
-- NDJSON metrics output
+`pipeline_depth > 1` (multiple in-flight requests per connection) is not yet
+implemented.
 
-## Contributing
-
-We welcome contributions to implement the Python engine! Please see:
-- [Architecture Documentation](../docs/ARCHITECTURE.md)
-- [Adding a Language Guide](../docs/ADDING_LANGUAGE.md)
-
-## Directory Structure (Planned)
-
-```
-python/
-├── README.md
-├── pyproject.toml
-├── requirements.txt
-└── src/
-    └── resp_bench/
-        ├── __init__.py
-        ├── __main__.py
-        ├── client/
-        │   ├── __init__.py
-        │   ├── interface.py
-        │   └── impl/
-        │       └── redis_py.py
-        ├── command/
-        ├── config/
-        ├── engine/
-        └── metrics/
-```
-
-## Usage (Future)
+## Installation
 
 ```bash
-# Install
 pip install -e .
+# with test tooling:
+pip install -e ".[dev]"
+```
 
-# Run benchmark
+## Usage
+
+```bash
 python -m resp_bench \
   --server localhost:6379 \
-  --driver ../configs/drivers/example-redis-py-standalone.json \
+  --driver ../configs/drivers/default/redis-py.json \
   --workload ../configs/workloads/example-workload.json \
   --metrics output.ndjson
 
-# Show supported drivers
+# Show supported drivers and commands
 python -m resp_bench --info
 ```
+
+## Testing
+
+```bash
+pytest                      # unit + recording-driver integration (no server needed)
+```
+
+See [../docs/ADDING_LANGUAGE.md](../docs/ADDING_LANGUAGE.md) and
+[../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for the shared contracts.

@@ -75,8 +75,10 @@ DRIVER_LANGUAGE_MAP = {
     "valkey-glide-node": "node",
     "ioredis": "node",
     "iovalkey": "node",
-    # Python drivers (future)
+    # Python drivers
     "redis-py": "python",
+    "valkey-py": "python",
+    "valkey-glide-python": "python",
     "aioredis": "python",
 }
 
