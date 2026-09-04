@@ -152,8 +152,78 @@ jobs:
           path: ${{ steps.names.outputs.result_file }}
           retention-days: 30
 
+  benchmark-python:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        driver:
+          - configs/drivers/default/redis-py.json
+          - configs/drivers/default/valkey-py.json
+          - configs/drivers/default/valkey-glide-python.json
+        workload:
+          - configs/workloads/reference/basic-standalone-single-client-1M-reqs.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install Python engine
+        run: cd python && pip install -e .
+
+      - name: Start Valkey server
+        run: |
+          # Use Makefile target which builds from source and configures with persistence disabled
+          make server-standalone-start
+          # Wait for server to be ready
+          sleep 2
+          # Verify server is up and persistence is disabled
+          work/valkey/bin/valkey-cli ping
+          work/valkey/bin/valkey-cli CONFIG GET save
+
+      - name: Extract names for result file
+        id: names
+        run: |
+          DRIVER_NAME=$(basename ${{ matrix.driver }} .json)
+          WORKLOAD_NAME=$(basename ${{ matrix.workload }} .json)
+          echo "driver_name=$DRIVER_NAME" >> $GITHUB_OUTPUT
+          echo "workload_name=$WORKLOAD_NAME" >> $GITHUB_OUTPUT
+          echo "result_file=results/github-runner/reference/${DRIVER_NAME}-${WORKLOAD_NAME}.ndjson" >> $GITHUB_OUTPUT
+
+      - name: Run benchmark
+        run: |
+          mkdir -p results/github-runner/reference
+          python -m resp_bench \
+            --server localhost:6379 \
+            --driver ${{ matrix.driver }} \
+            --workload ${{ matrix.workload }} \
+            --metrics ${{ steps.names.outputs.result_file }} \
+            --commit-id ${{ github.sha }}
+
+      - name: Stop Valkey server
+        if: always()
+        run: |
+          make server-standalone-stop || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-python-${{ steps.names.outputs.driver_name }}-${{ steps.names.outputs.workload_name }}
+          path: ${{ steps.names.outputs.result_file }}
+          retention-days: 30
+
   generate-graphs:
-    needs: [benchmark-java, benchmark-ruby]
+    needs: [benchmark-java, benchmark-ruby, benchmark-python]
     runs-on: ubuntu-latest
     permissions:
       contents: write

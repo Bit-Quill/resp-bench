@@ -178,9 +178,10 @@ class MetricsCollector:
     
     def record(self, command: str, latency_us: int, success: bool) -> None:
         if command not in self.command_metrics:
-            # 1µs to 1 hour, 3 significant figures
+            # 1µs to 600s, 3 significant figures (must match the other engines:
+            # Java/C#/Ruby all use a max of 600_000_000µs, not 1 hour)
             self.command_metrics[command] = CommandMetrics(
-                histogram=HdrHistogram(1, 3600000000, 3)
+                histogram=HdrHistogram(1, 600000000, 3)
             )
         
         metrics = self.command_metrics[command]
