@@ -59,6 +59,21 @@ async def test_request_based_completion_totals(tmp_path):
     assert row["metrics"]["SET"]["errors"] == 0
 
 
+async def test_shared_budget_hits_exact_total_when_uneven(tmp_path):
+    # The request target is a single shared budget (matching Java), not split
+    # per worker, so a target that does not divide evenly across connections
+    # must still produce exactly that many requests.
+    rows = await _run(
+        tmp_path,
+        _driver(),
+        _workload(
+            [_phase(connections=4, completion=CompletionConfig(type="requests", requests=401))]
+        ),
+    )
+    assert rows[0]["totals"]["requests"] == 401
+    assert rows[0]["metrics"]["SET"]["requests"] == 401
+
+
 async def test_error_injection_counts_errors(tmp_path):
     rows = await _run(
         tmp_path,
