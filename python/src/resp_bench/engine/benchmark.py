@@ -8,6 +8,10 @@ Concurrency model (see the issue analysis): a single asyncio event loop with
 Java/Ruby "one in-flight request per connection" model, so results stay
 comparable across engines.
 
+A request-based phase target is a single budget shared across all workers, which
+they claim from one request at a time -- matching the Java reference's shared
+``AtomicLong`` rather than pre-splitting the target per worker.
+
 ``pipeline_depth > 1`` (multiple in-flight requests per connection) is
 intentionally NOT implemented in v1 (deferred; the worker loop is the natural
 extension point).
@@ -177,29 +181,35 @@ class BenchmarkEngine:
         seed_base = phase.keyspace.seed_value()
         shared_counter = Counter()  # shared across workers for sequential_int
 
-        # Divide a request-based target evenly across workers; duration-based
-        # runs use a wall-clock deadline instead.
+        # A request-based target is a single budget SHARED across workers, which
+        # each worker claims from one request at a time (matching the Java
+        # reference's shared AtomicLong). A slow connection therefore cannot cap
+        # the phase -- faster workers absorb the slack and the phase ends when
+        # the total budget is exhausted. Duration-based runs use a wall-clock
+        # deadline instead.
         target_requests = None if completion.is_duration_based() else completion.total_requests()
         end_time = (
             time.monotonic() + completion.duration_seconds()
             if completion.is_duration_based()
             else None
         )
-        per_worker = target_requests // num_workers if target_requests is not None else None
-        remainder = target_requests % num_workers if target_requests is not None else 0
+        request_budget = Counter()
 
         async def worker(idx: int, client: AsyncBenchmarkClient) -> None:
             key_gen = KeyGenerator.create_with_seed(
                 phase.keyspace, seed_base + idx, sequential_counter=shared_counter
             )
             selector = CommandSelector(commands)
-            my_target = (
-                per_worker + (1 if idx < remainder else 0)
-                if target_requests is not None
-                else None
-            )
-            count = 0
-            while (count < my_target) if my_target is not None else (time.monotonic() < end_time):
+            while True:
+                if target_requests is not None:
+                    # Claim a slot; claims are atomic on the single event loop
+                    # (no await between read and increment), so unlike Java no
+                    # decrement-on-overshoot is needed.
+                    if request_budget.next_value() >= target_requests:
+                        break
+                elif time.monotonic() >= end_time:
+                    break
+
                 if rate_limiter is not None:
                     await rate_limiter.acquire()
                 command = selector.select()
@@ -211,7 +221,6 @@ class BenchmarkEngine:
                     collector.record(
                         CommandResult(command_name=command.name, latency_micros=0, success=False)
                     )
-                count += 1
 
         logger.info("Starting %d worker coroutines...", num_workers)
         try:
