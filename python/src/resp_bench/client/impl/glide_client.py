@@ -75,3 +75,8 @@ class GlideBenchmarkClient(AsyncBenchmarkClient):
             return version("valkey-glide")
         except Exception:  # noqa: BLE001 - version is best-effort metadata
             return "unknown"
+
+    def driver_details(self) -> dict:
+        # GLIDE always negotiates RESP3 and parses in Rust, so neither is
+        # environment-dependent; recorded for symmetry with the peer drivers.
+        return {"resp_protocol": 3, "response_parser": "glide-rust", "retries": 0}

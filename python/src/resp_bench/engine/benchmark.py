@@ -1,20 +1,27 @@
 """Async benchmark engine.
 
-Concurrency model (see the issue analysis): a single asyncio event loop with
-**one client per connection** (the ``client == connection`` invariant) and
-**one worker coroutine per connection**, all run concurrently via
-``asyncio.gather``. Each worker awaits one command at a time -- i.e.
-``pipeline_depth`` is effectively 1. This is the faithful async analogue of the
-Java/Ruby "one in-flight request per connection" model, so results stay
-comparable across engines.
+Concurrency model: a single asyncio event loop with **one client per
+connection** and **one worker coroutine per connection**, run concurrently.
+Each worker awaits one command at a time -- i.e. ``pipeline_depth`` is
+effectively 1, the same "one in-flight request per connection" shape the Java
+engine's virtual-thread workers produce.
 
 A request-based phase target is a single budget shared across all workers, which
 they claim from one request at a time -- matching the Java reference's shared
 ``AtomicLong`` rather than pre-splitting the target per worker.
 
-``pipeline_depth > 1`` (multiple in-flight requests per connection) is
-intentionally NOT implemented in v1 (deferred; the worker loop is the natural
-extension point).
+Known limits of this model, both deliberate:
+
+* **Single event loop.** Above roughly ``HIGH_CONNECTION_WARN_THRESHOLD``
+  connections the loop itself, not the driver, becomes the bottleneck, and the
+  loop's queuing delay is attributed to the driver in the reported latency. The
+  Java engine faced the same ceiling with a single command-issuing thread (see
+  ``docs/ARCHITECTURE.md``) and solved it with multiple issuer threads; this
+  engine has no equivalent yet, so it warns above the threshold. Do not compare
+  high-connection-count Python results against other engines without accounting
+  for this.
+* **``pipeline_depth > 1``** (multiple in-flight requests per connection) is not
+  implemented; a phase requesting it runs at depth 1 with a warning.
 """
 
 from __future__ import annotations
@@ -39,6 +46,40 @@ from .rate_limiter import RateLimiter
 
 logger = logging.getLogger("resp_bench")
 
+# Above this many connections the single event loop, not the driver, tends to set
+# the throughput ceiling and its queuing delay shows up as driver latency.
+HIGH_CONNECTION_WARN_THRESHOLD = 128
+
+# A worker yields at least this often even when every request completes without
+# suspending (a cache hit, or an in-memory driver). Without it one connection can
+# monopolise a whole duration-based phase while its peers record nothing.
+YIELD_EVERY_N_REQUESTS = 64
+
+# Backoff applied after repeated consecutive failures on one connection, so a
+# permanently-failing connection cannot spin at full CPU inflating the error
+# count. Capped so a transient blip costs almost nothing.
+CONSECUTIVE_FAILURE_BACKOFF_AFTER = 8
+MAX_FAILURE_BACKOFF_SECONDS = 0.05
+
+
+async def _gather_all_or_cancel(coros) -> None:
+    """Await all coroutines; on the first failure cancel and drain the rest.
+
+    ``asyncio.gather`` deliberately does NOT cancel siblings when one task
+    raises, which would leave workers running against clients the caller has
+    already closed. This wrapper cancels them and waits for them to finish
+    unwinding before re-raising, so no work escapes the phase that started it.
+    """
+    tasks = [asyncio.ensure_future(c) for c in coros]
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
 
 class BenchmarkEngine:
     def __init__(
@@ -57,6 +98,13 @@ class BenchmarkEngine:
         self._workload_config = workload_config
         self._writer = NdjsonWriter(metrics_path)
         self._commit_id = commit_id
+        # True if any phase ended in ERROR. The CLI turns this into a non-zero
+        # exit code so the matrix runner does not score the cell as a good run.
+        self._had_error = False
+
+    @property
+    def had_error(self) -> bool:
+        return self._had_error
 
     async def run(self) -> None:
         logger.info("Starting benchmark: %s", self._workload_config.name())
@@ -86,12 +134,14 @@ class BenchmarkEngine:
                 primary_driver_version=sample.driver_version(),
                 secondary_driver_id=self._driver_config.secondary_driver_id(),
                 secondary_driver_version=sample.secondary_driver_version(),
+                driver_details=sample.driver_details(),
             )
             logger.info(
-                "Metadata: commit=%s, driver=%s, version=%s",
+                "Metadata: commit=%s, driver=%s, version=%s, details=%s",
                 self._commit_id or "N/A",
                 self._driver_config.driver_id,
                 sample.driver_version(),
+                sample.driver_details() or "{}",
             )
             await sample.close()
         except Exception as exc:  # noqa: BLE001 - metadata is best-effort
@@ -116,20 +166,50 @@ class BenchmarkEngine:
                 phase.id,
             )
 
-        collector = MetricsCollector()
-        clients = await self._create_clients(phase)
-        commands = CommandFactory.create_all(phase.commands)
-        rate_limiter = RateLimiter.create(phase.rps_limit) if phase.has_rps_limit() else None
+        if phase.connections > HIGH_CONNECTION_WARN_THRESHOLD:
+            logger.warning(
+                "connections=%d exceeds %d: the single event loop is likely the "
+                "bottleneck rather than the driver, and loop queuing delay is "
+                "reported as driver latency. Treat these results with care and do "
+                "not compare them directly against other engines.",
+                phase.connections,
+                HIGH_CONNECTION_WARN_THRESHOLD,
+            )
 
+        collector = MetricsCollector()
+        status = "ERROR"
+        failure: Optional[BaseException] = None
+        clients: List[AsyncBenchmarkClient] = []
         try:
+            # Inside the guarded region: a failure part-way through opening
+            # connections (server down, maxclients reached) or an unsupported
+            # command name must still close what was opened and emit a row.
+            clients = await self._create_clients(phase)
+            commands = CommandFactory.create_all(phase.commands)
+
             if phase.warmup_requests > 0:
                 await self._warmup(clients, phase.warmup_requests)
 
+            # Started here so the measured window covers the workload only, not
+            # connection setup or warmup.
             collector.start()
-            status = await self._run_workload(phase, clients, commands, rate_limiter, collector)
-            collector.stop()
+            status = await self._run_workload(phase, clients, commands, collector)
+        except Exception as exc:  # noqa: BLE001 - recorded below, then re-raised
+            # Failures used to escape before anything was written, so the phase
+            # produced no row at all. Always emit a row so it stays visible.
+            failure = exc
+            logger.error("Phase %s failed: %s", phase.id, exc)
         finally:
+            # A phase that failed before the workload started still needs real
+            # timestamps: nulls would violate the documented schema and the graph
+            # scripts would aggregate the row as a 0-RPS data point.
+            if collector.start_time is None:
+                collector.start()
+            collector.stop()
             await self._close_clients(clients)
+
+        if status == "ERROR":
+            self._had_error = True
 
         self._writer.write_phase_results(
             phase_id=phase.id,
@@ -138,6 +218,9 @@ class BenchmarkEngine:
             collector=collector,
         )
         self._log_phase_summary(phase, collector, status)
+
+        if failure is not None:
+            raise failure
 
     async def _create_clients(self, phase: PhaseConfig) -> List[AsyncBenchmarkClient]:
         logger.info("Creating %d connections...", phase.connections)
@@ -165,7 +248,9 @@ class BenchmarkEngine:
                 if not result.success:
                     raise RuntimeError(f"Warmup PING failed: {result.error}")
 
-        await asyncio.gather(*(warm(c) for c in clients))
+        # Cancel-and-drain on first failure so no warmup task keeps pinging a
+        # client that _execute_phase has already closed.
+        await _gather_all_or_cancel(warm(c) for c in clients)
         logger.info("Warmup completed")
 
     async def _run_workload(
@@ -173,13 +258,18 @@ class BenchmarkEngine:
         phase: PhaseConfig,
         clients: List[AsyncBenchmarkClient],
         commands: List[Command],
-        rate_limiter: Optional[RateLimiter],
         collector: MetricsCollector,
     ) -> str:
         completion = phase.completion
         num_workers = len(clients)
         seed_base = phase.keyspace.seed_value()
         shared_counter = Counter()  # shared across workers for sequential_int
+
+        # Constructed here, at the start of the measured window, rather than
+        # before warmup: the limiter's schedule starts from its construction
+        # time, so building it earlier would let the phase open with a burst of
+        # accumulated slots proportional to the warmup duration.
+        rate_limiter = RateLimiter.create(phase.rps_limit) if phase.has_rps_limit() else None
 
         # A request-based target is a single budget SHARED across workers, which
         # each worker claims from one request at a time (matching the Java
@@ -200,6 +290,8 @@ class BenchmarkEngine:
                 phase.keyspace, seed_base + idx, sequential_counter=shared_counter
             )
             selector = CommandSelector(commands)
+            since_yield = 0
+            consecutive_failures = 0
             while True:
                 if target_requests is not None:
                     # Claim a slot; claims are atomic on the single event loop
@@ -212,27 +304,73 @@ class BenchmarkEngine:
 
                 if rate_limiter is not None:
                     await rate_limiter.acquire()
-                command = selector.select()
-                key = key_gen.next_key()
+
+                command = None
+                succeeded = False
                 try:
+                    command = selector.select()
+                    key = key_gen.next_key()
                     result = await command.execute(client, key)
                     collector.record(result)
+                    succeeded = result.success
                 except Exception:  # noqa: BLE001 - record failures, keep going
                     collector.record(
-                        CommandResult(command_name=command.name, latency_micros=0, success=False)
+                        CommandResult(
+                            command_name=command.name if command else "UNKNOWN",
+                            latency_micros=0,
+                            success=False,
+                        )
                     )
+
+                # A request can complete without ever suspending -- a driver that
+                # raises before its first await (caught by _measure), or any
+                # in-memory/cache-hit response. Such a worker would monopolise the
+                # event loop, so guarantee a suspension point.
+                since_yield += 1
+                if succeeded:
+                    consecutive_failures = 0
+                    if since_yield >= YIELD_EVERY_N_REQUESTS:
+                        since_yield = 0
+                        await asyncio.sleep(0)
+                else:
+                    consecutive_failures += 1
+                    since_yield = 0
+                    if consecutive_failures >= CONSECUTIVE_FAILURE_BACKOFF_AFTER:
+                        # Back off so a permanently-failing connection cannot spin
+                        # at full CPU inflating the error count.
+                        await asyncio.sleep(
+                            min(
+                                0.001 * (consecutive_failures - CONSECUTIVE_FAILURE_BACKOFF_AFTER + 1),
+                                MAX_FAILURE_BACKOFF_SECONDS,
+                            )
+                        )
+                    else:
+                        await asyncio.sleep(0)
 
         logger.info("Starting %d worker coroutines...", num_workers)
         try:
-            await asyncio.gather(*(worker(i, c) for i, c in enumerate(clients)))
-            logger.info("All operations completed (%d total requests)", collector.total_requests)
-            return "COMPLETED"
+            # Cancel-and-drain on first failure: a worker that dies must not
+            # leave its peers running against clients we are about to close.
+            await _gather_all_or_cancel(worker(i, c) for i, c in enumerate(clients))
         except KeyboardInterrupt:  # pragma: no cover
             logger.warning("Workload interrupted")
             return "INTERRUPTED"
         except Exception as exc:  # noqa: BLE001
             logger.error("Error during workload execution: %s", exc)
             return "ERROR"
+
+        # A phase in which nothing succeeded produced no usable latency data;
+        # reporting COMPLETED would let the orchestrator record it as a good run.
+        successes = collector.total_requests - collector.total_errors
+        if collector.total_requests > 0 and successes == 0:
+            logger.error(
+                "All %d requests failed; reporting phase as ERROR",
+                collector.total_requests,
+            )
+            return "ERROR"
+
+        logger.info("All operations completed (%d total requests)", collector.total_requests)
+        return "COMPLETED"
 
     async def _close_clients(self, clients: List[AsyncBenchmarkClient]) -> None:
         logger.info("Closing %d connections...", len(clients))

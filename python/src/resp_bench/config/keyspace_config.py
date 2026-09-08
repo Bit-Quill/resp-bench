@@ -26,6 +26,23 @@ class KeyspaceConfig:
         if self.generation_alg is None:
             self.generation_alg = "sequential_int"
 
+    def validate(self) -> None:
+        """Reject a keyspace that would crash the key generator mid-run.
+
+        ``keys_count`` reaches a modulo in KeyGenerator, so 0 or a missing value
+        would raise ZeroDivisionError/TypeError inside a worker instead of
+        failing at config load.
+        """
+        if self.keys_count is None or self.keys_count < 1:
+            raise ValueError("keyspace.keys_count must be a positive integer")
+        if self.key_size_bytes < 1:
+            raise ValueError("keyspace.key_size_bytes must be a positive integer")
+        if self.generation_alg not in ("sequential_int", "uniform_rand"):
+            raise ValueError(
+                f"Unknown keyspace.generation_alg: {self.generation_alg} "
+                '(expected "sequential_int" or "uniform_rand")'
+            )
+
     def is_sequential_int(self) -> bool:
         return self.generation_alg == "sequential_int"
 
