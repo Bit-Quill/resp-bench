@@ -6,7 +6,7 @@ from resp_bench.command.factory import CommandFactory
 
 def test_supported_drivers():
     drivers = BenchmarkClientFactory.supported_drivers()
-    assert drivers == ["valkey-glide-python", "redis-py", "valkey-py", "recording"]
+    assert drivers == ["valkey-glide-python", "redis-py", "recording"]
 
 
 def test_create_recording_driver():

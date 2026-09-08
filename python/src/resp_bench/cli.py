@@ -78,7 +78,8 @@ def _validate(options: argparse.Namespace) -> None:
         raise ValueError(f"Workload config not found: {options.workload}")
 
 
-async def _run_benchmark(options: argparse.Namespace) -> None:
+async def _run_benchmark(options: argparse.Namespace) -> bool:
+    """Run the benchmark; returns True if any phase ended in ERROR."""
     host, port = _parse_server(options.server)
     driver_config = ConfigLoader.load_driver_config(options.driver)
     workload_config = ConfigLoader.load_workload_config(options.workload)
@@ -92,6 +93,7 @@ async def _run_benchmark(options: argparse.Namespace) -> None:
         commit_id=options.commit_id,
     )
     await engine.run()
+    return engine.had_error
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -104,7 +106,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         _validate(options)
-        asyncio.run(_run_benchmark(options))
+        had_error = asyncio.run(_run_benchmark(options))
+        if had_error:
+            # Exit non-zero so the matrix runner records the cell as failed
+            # rather than scoring an unusable run as a good data point.
+            print("Error: one or more phases ended with status ERROR", file=sys.stderr)
+            return 1
         return 0
     except Exception as exc:  # noqa: BLE001 - top-level CLI error boundary
         print(f"Error: {exc}", file=sys.stderr)

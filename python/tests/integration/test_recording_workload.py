@@ -105,8 +105,11 @@ async def test_warmup_fails_fast_on_all_errors(tmp_path):
     )
     with pytest.raises(RuntimeError, match="Warmup"):
         await engine.run()
-    # No phase results were written.
-    assert not out.exists() or out.read_text() == ""
+    # The failure still produces a row, marked ERROR, so the phase is visible in
+    # the metrics output instead of silently vanishing.
+    row = json.loads(out.read_text().splitlines()[0])
+    assert row["phase"]["status"] == "ERROR"
+    assert row["totals"]["requests"] == 0
 
 
 async def test_two_phases_written_as_two_lines(tmp_path):

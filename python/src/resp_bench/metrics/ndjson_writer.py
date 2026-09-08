@@ -31,6 +31,7 @@ class NdjsonWriter:
         self._primary_driver_version = None
         self._secondary_driver_id = None
         self._secondary_driver_version = None
+        self._driver_details = {}
 
     def set_metadata(
         self,
@@ -40,12 +41,14 @@ class NdjsonWriter:
         primary_driver_version: Optional[str],
         secondary_driver_id: Optional[str] = None,
         secondary_driver_version: Optional[str] = None,
+        driver_details: Optional[dict] = None,
     ) -> None:
         self._commit_id = commit_id
         self._driver_id = driver_id
         self._primary_driver_version = primary_driver_version
         self._secondary_driver_id = secondary_driver_id
         self._secondary_driver_version = secondary_driver_version
+        self._driver_details = driver_details or {}
 
     def write_phase_results(
         self,
@@ -79,6 +82,12 @@ class NdjsonWriter:
                 metadata["secondary_driver_id"] = self._secondary_driver_id
             if self._secondary_driver_version:
                 metadata["secondary_driver_version"] = self._secondary_driver_version
+            # Additive, optional fields: settings that change what is actually
+            # being measured (negotiated protocol, response parser, retry count).
+            # Other engines omit them, and downstream tooling reads metadata by
+            # key, so extra keys are ignored there.
+            for key, value in self._driver_details.items():
+                metadata.setdefault(key, value)
             result["metadata"] = metadata
 
         result["phase"] = {

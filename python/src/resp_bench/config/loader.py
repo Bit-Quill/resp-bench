@@ -52,6 +52,40 @@ class ConfigLoader:
 
     @staticmethod
     def _parse_phase(data: Dict[str, Any]) -> PhaseConfig:
+        phase = ConfigLoader._build_phase(data)
+        # Validate at load time so a bad config fails loudly before any
+        # connection is opened, rather than running zero requests or crashing a
+        # worker mid-phase.
+        phase_id = phase.id or "<unnamed>"
+        try:
+            phase.completion.validate()
+            phase.keyspace.validate()
+            if phase.connections is None or phase.connections < 1:
+                raise ValueError("connections must be a positive integer")
+            if not phase.commands:
+                raise ValueError("commands must contain at least one entry")
+            # The shared workload schema permits commands this engine has not
+            # implemented; without this check they would raise only after every
+            # connection had been opened.
+            from ..command.factory import CommandFactory
+
+            supported = CommandFactory.supported_commands()
+            unsupported = sorted({c.command for c in phase.commands} - set(supported))
+            if unsupported:
+                raise ValueError(
+                    f"unsupported command(s) {', '.join(unsupported)}; "
+                    f"this engine supports: {', '.join(supported)}"
+                )
+            # All-zero weights would make CommandSelector fall through to the last
+            # command for every pick, silently running a different workload.
+            if sum(c.weight for c in phase.commands) <= 0:
+                raise ValueError("command weights must sum to a positive value")
+        except ValueError as exc:
+            raise ValueError(f"invalid phase '{phase_id}': {exc}") from exc
+        return phase
+
+    @staticmethod
+    def _build_phase(data: Dict[str, Any]) -> PhaseConfig:
         return PhaseConfig(
             id=data.get("id"),
             description=data.get("description"),

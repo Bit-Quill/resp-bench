@@ -3,5 +3,6 @@
     "description": "valkey-glide Python async client - default configuration",
     "driver_id": "valkey-glide-python",
     "mode": "standalone",
+    "command_timeout_ms": 5000,
     "specific_driver_config": {}
 }

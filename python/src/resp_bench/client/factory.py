@@ -27,12 +27,6 @@ def _make_redis_py() -> "AsyncBenchmarkClient":
     return RedisPyClient()
 
 
-def _make_valkey_py() -> "AsyncBenchmarkClient":
-    from .impl.valkey_py_client import ValkeyPyClient
-
-    return ValkeyPyClient()
-
-
 def _make_recording() -> "AsyncBenchmarkClient":
     from .impl.recording_client import RecordingClient
 
@@ -44,7 +38,6 @@ class BenchmarkClientFactory:
     _FACTORIES: Dict[str, Callable[[], "AsyncBenchmarkClient"]] = {
         "valkey-glide-python": _make_glide,
         "redis-py": _make_redis_py,
-        "valkey-py": _make_valkey_py,
         "recording": _make_recording,
     }
 

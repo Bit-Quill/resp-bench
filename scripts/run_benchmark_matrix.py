@@ -126,7 +126,6 @@ DRIVER_ENGINE_MAP = {
     "valkey-glide-csharp": "csharp",
     # Python drivers
     "redis-py": "python",
-    "valkey-py": "python",
     "valkey-glide-python": "python",
     # Recording (default to java)
     "recording": "java",

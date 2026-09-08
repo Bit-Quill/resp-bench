@@ -160,7 +160,6 @@ jobs:
       matrix:
         driver:
           - configs/drivers/default/redis-py.json
-          - configs/drivers/default/valkey-py.json
           - configs/drivers/default/valkey-glide-python.json
         workload:
           - configs/workloads/reference/basic-standalone-single-client-1M-reqs.json

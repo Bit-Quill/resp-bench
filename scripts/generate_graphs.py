@@ -73,7 +73,6 @@ DRIVER_LANGUAGE_MAP = {
     "valkey-glide-csharp": "csharp",
     # Python drivers
     "redis-py": "python",
-    "valkey-py": "python",
     "valkey-glide-python": "python",
     "aioredis": "python",
 }

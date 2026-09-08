@@ -3,5 +3,6 @@
   "description": "redis-py async client - standalone mode",
   "driver_id": "redis-py",
   "mode": "standalone",
+  "command_timeout_ms": 5000,
   "specific_driver_config": {}
 }
