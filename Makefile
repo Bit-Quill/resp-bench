@@ -34,6 +34,8 @@ WORK_DIR=$(shell pwd)/work
 	python-build python-test python-run python-clean \
 	ruby-build ruby-test ruby-run ruby-clean ruby-info \
 	csharp-build csharp-test csharp-run csharp-clean csharp-info \
+	node-build node-test node-unit-test node-integration-test \
+	node-run node-clean node-info \
 	config-editor-build config-editor-dev
 
 # ============================================================================
@@ -73,6 +75,13 @@ help:
 	@echo "  make csharp-run             Run C# benchmark (requires DRIVER and WORKLOAD)"
 	@echo "  make csharp-clean           Clean C# build artifacts"
 	@echo "  make csharp-info            Show supported C# drivers and commands"
+	@echo ""
+	@echo "Node.js Engine:"
+	@echo "  make node-build             Install deps and compile the Node.js engine"
+	@echo "  make node-test              Run Node.js tests (unit + integration)"
+	@echo "  make node-run               Run Node.js benchmark (requires DRIVER and WORKLOAD)"
+	@echo "  make node-clean             Clean Node.js build artifacts"
+	@echo "  make node-info              Show supported Node.js drivers and commands"
 	@echo ""
 	@echo "Config Editor:"
 	@echo "  make config-editor-build    Build config editor UI"
@@ -388,6 +397,41 @@ csharp-info: csharp-build
 	dotnet run --project $(CSHARP_PROJECT) -c Release -- --info
 
 # ============================================================================
+# Node.js Engine
+# ============================================================================
+
+# tsc emits into node/dist mirroring the source tree, so src/cli.ts -> dist/src/cli.js
+NODE_CLI=node/dist/src/cli.js
+
+node-build:
+	cd node && npm ci && npm run build
+
+node-test: node-unit-test node-integration-test
+
+node-unit-test: node-build
+	cd node && node --test dist/test/unit/
+
+# The live-server tests skip themselves unless VALKEY_HOST is set, so the server
+# has to be up before this runs.
+node-integration-test: node-build server-standalone-start
+	sleep 1
+	cd node && VALKEY_HOST=localhost VALKEY_PORT=6379 node --test dist/test/integration/
+	$(MAKE) server-standalone-stop
+
+node-run: node-build
+	node $(NODE_CLI) \
+		--server $(SERVER) \
+		--driver $(DRIVER) \
+		--workload $(WORKLOAD) \
+		--metrics $(METRICS_OUTPUT)
+
+node-info: node-build
+	node $(NODE_CLI) --info
+
+node-clean:
+	cd node && rm -rf dist node_modules coverage
+
+# ============================================================================
 # Config Editor
 # ============================================================================
 
@@ -447,8 +491,8 @@ test-scripts-all: java-build
 # All Languages
 # ============================================================================
 
-build-all: java-build ruby-build csharp-build python-build
+build-all: java-build ruby-build csharp-build node-build python-build
 
-test-all: java-test ruby-test csharp-test python-test
+test-all: java-test ruby-test csharp-test node-test python-test
 
-clean-all: java-clean ruby-clean csharp-clean python-clean clean
+clean-all: java-clean ruby-clean csharp-clean node-clean python-clean clean
