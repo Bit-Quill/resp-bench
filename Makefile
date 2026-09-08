@@ -34,7 +34,7 @@ WORK_DIR=$(shell pwd)/work
 	python-build python-test python-run python-clean \
 	ruby-build ruby-test ruby-run ruby-clean ruby-info \
 	csharp-build csharp-test csharp-run csharp-clean csharp-info \
-	node-build node-test node-unit-test node-integration-test \
+	node-build node-deps node-test node-unit-test node-integration-test \
 	node-run node-clean node-info \
 	config-editor-build config-editor-dev
 
@@ -403,8 +403,23 @@ csharp-info: csharp-build
 # tsc emits into node/dist mirroring the source tree, so src/cli.ts -> dist/src/cli.js
 NODE_CLI=node/dist/src/cli.js
 
-node-build:
-	cd node && npm ci && npm run build
+# Stamp file so `npm ci` runs only when the manifests actually change. The matrix
+# runner invokes `make node-run` once per cell, and `npm ci` deletes and
+# reinstalls node_modules every time it runs — on a 75-cell sweep that is ~15
+# minutes of pure reinstall plus 75 chances for a network blip mid-sweep. The
+# stamp lives inside node_modules, so wiping that directory correctly forces a
+# reinstall. `npm run build` stays on every invocation: tsc is incremental and
+# no-ops in well under a second.
+NODE_DEPS_STAMP=node/node_modules/.resp-bench-deps-stamp
+
+$(NODE_DEPS_STAMP): node/package.json node/package-lock.json
+	cd node && npm ci
+	@touch $@
+
+node-deps: $(NODE_DEPS_STAMP)
+
+node-build: node-deps
+	cd node && npm run build
 
 node-test: node-unit-test node-integration-test
 
