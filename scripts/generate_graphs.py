@@ -71,8 +71,9 @@ DRIVER_LANGUAGE_MAP = {
     # C# drivers
     "stackexchange-redis": "csharp",
     "valkey-glide-csharp": "csharp",
-    # Python drivers (future)
+    # Python drivers
     "redis-py": "python",
+    "valkey-glide-python": "python",
     "aioredis": "python",
 }
 

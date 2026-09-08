@@ -124,6 +124,9 @@ DRIVER_ENGINE_MAP = {
     # C# drivers
     "stackexchange-redis": "csharp",
     "valkey-glide-csharp": "csharp",
+    # Python drivers
+    "redis-py": "python",
+    "valkey-glide-python": "python",
     # Recording (default to java)
     "recording": "java",
 }
