@@ -1,0 +1,30 @@
+{
+  "name": "resp-bench-node",
+  "version": "1.0.0",
+  "description": "resp-bench Node.js benchmark engine",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/test/",
+    "test:unit": "npm run build && node --test dist/test/unit/",
+    "test:integration": "npm run build && node --test dist/test/integration/",
+    "start": "node dist/src/cli.js"
+  },
+  "dependencies": {
+    "@valkey/valkey-glide": "^2.5.2",
+    "hdr-histogram-js": "^3.0.1",
+    "ioredis": "^5.11.1",
+    "iovalkey": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.9.2"
+  }
+}

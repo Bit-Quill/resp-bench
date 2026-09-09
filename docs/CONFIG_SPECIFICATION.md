@@ -54,6 +54,11 @@ resp-bench uses two JSON configuration files:
 - `stackexchange-redis` - StackExchange.Redis client
 - `valkey-glide-csharp` - Valkey GLIDE C# client
 
+**Node.js:**
+- `valkey-glide-node` - Valkey GLIDE Node.js client (not `valkey-glide`, which is Java's)
+- `ioredis` - ioredis client
+- `iovalkey` - iovalkey client (the Valkey-maintained ioredis fork)
+
 **Python (planned):**
 - `redis-py` - redis-py synchronous client
 - `redis-py-async` - redis-py async client

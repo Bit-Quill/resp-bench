@@ -1,0 +1,20 @@
+{
+    "description": "Compare Node.js drivers (GLIDE vs ioredis vs iovalkey) across client counts",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-10-secs.json",
+    "iterations": 5,
+    "dimensions": {
+        "connections": [
+            1,
+            2,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/default/valkey-glide-node.json",
+            "configs/drivers/default/ioredis.json",
+            "configs/drivers/default/iovalkey.json"
+        ]
+    }
+}

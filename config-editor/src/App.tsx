@@ -35,7 +35,12 @@ interface CommandConfig {
   data_size_bytes?: number
 }
 
-const DRIVERS = ['jedis', 'lettuce', 'valkey-glide', 'redisson', 'spring-data-valkey', 'spring-data-redis']
+const DRIVERS = [
+  // Java
+  'jedis', 'lettuce', 'valkey-glide', 'redisson', 'spring-data-valkey', 'spring-data-redis',
+  // Node.js
+  'valkey-glide-node', 'ioredis', 'iovalkey',
+]
 const COMMANDS = ['set', 'get', 'ping']
 const ALGORITHMS = ['sequential_int', 'uniform_rand']
 
