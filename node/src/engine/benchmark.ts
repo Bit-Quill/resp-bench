@@ -153,11 +153,17 @@ export class BenchmarkEngine {
     const collector = new MetricsCollector();
     const clients = await this.createClients(phase);
     const commands = CommandFactory.createAll(phase.commands);
-    const rateLimiter = phase.hasRpsLimit() ? RateLimiter.create(phase.rpsLimit) : null;
 
     let status: string;
     try {
       if (phase.warmupRequests > 0) await this.warmup(clients, phase.warmupRequests);
+
+      // Created *after* warmup, deliberately. The limiter starts its clock at
+      // construction, so building it earlier would bank the whole warmup
+      // duration as credit and release a burst of
+      // (warmup_duration / interval) requests the moment the workload starts --
+      // defeating the evenly-spaced, no-burst property the limiter exists for.
+      const rateLimiter = phase.hasRpsLimit() ? RateLimiter.create(phase.rpsLimit) : null;
 
       collector.start();
       status = await this.runWorkload(phase, clients, commands, rateLimiter, collector);
@@ -198,14 +204,20 @@ export class BenchmarkEngine {
    *
    * A dead or misconfigured server would otherwise produce a whole phase of
    * nothing but errors, which is far harder to diagnose than an upfront throw.
+   *
+   * Uses `allSettled`, not `all`: `all` rejects on the first failure while the
+   * remaining warmup loops keep running unawaited, so `executePhase`'s `finally`
+   * would close the clients underneath them. Settling every loop first means a
+   * warmup failure leaves nothing in flight.
    */
   private async warmup(clients: BenchmarkClient[], warmupRequests: number): Promise<void> {
     this.log.info(`Warmup: ${warmupRequests} PING(s) per client...`);
     // Warmup mode lets the recording driver suppress simulated errors, so an
     // error_rate workload is not aborted by the very errors it is measuring.
     for (const client of clients) client.setWarmupMode?.(true);
+    let outcomes: PromiseSettledResult<void>[];
     try {
-      await Promise.all(
+      outcomes = await Promise.allSettled(
         clients.map(async (client) => {
           for (let i = 0; i < warmupRequests; i++) {
             const result = await client.ping();
@@ -217,6 +229,11 @@ export class BenchmarkEngine {
       );
     } finally {
       for (const client of clients) client.setWarmupMode?.(false);
+    }
+
+    const failure = outcomes.find((o): o is PromiseRejectedResult => o.status === 'rejected');
+    if (failure !== undefined) {
+      throw failure.reason instanceof Error ? failure.reason : new Error(String(failure.reason));
     }
     this.log.info('Warmup completed');
   }

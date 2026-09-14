@@ -258,6 +258,39 @@ describe('recording-driver workload', () => {
     assert.ok(elapsed >= 400, `rps_limit was not enforced: ${elapsed}ms for 50 requests at 100/s`);
   });
 
+  it('does not bank warmup time as rate-limiter credit', async () => {
+    // Regression: the limiter starts its clock at construction, so building it
+    // before warmup banked the whole warmup duration as credit and released a
+    // burst of (warmup_duration / interval) requests once the workload began.
+    //
+    // Sized so the burst would swallow the entire workload: warmup is 25 PINGs
+    // at 20ms = ~500ms of idle limiter time, and at 50 rps (a 20ms interval)
+    // that banks ~25 free requests -- every request this phase issues. A banked
+    // limiter therefore finishes in ~500ms (warmup only); a correctly-scoped one
+    // additionally paces 24 intervals, so ~980ms.
+    const started = Date.now();
+    const { records } = await run({
+      phases: [
+        {
+          ...STEADY_PHASE,
+          connections: 4,
+          warmup_requests: 25,
+          rps_limit: 50,
+          completion: { type: 'requests', requests: 25 },
+        },
+      ],
+      specific: { operation_delay_micros: 20_000 },
+    });
+    const elapsed = Date.now() - started;
+
+    assert.equal(records[0]!['totals'].requests, 25);
+    assert.ok(
+      elapsed >= 850,
+      `rate limiter released a warmup-banked burst: 25 requests at 50 rps after ` +
+        `a ~500ms warmup took only ${elapsed}ms (expected ~980ms)`,
+    );
+  });
+
   it('gates connection setup with a cps_limit', async () => {
     const started = Date.now();
     await run({
