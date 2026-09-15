@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace RespBench\Client;
 
 use InvalidArgumentException;
+use RespBench\Client\Impl\PhpRedisClient;
 use RespBench\Client\Impl\RecordingClient;
 use RespBench\Client\Impl\ValkeyGlidePhpClient;
 use RespBench\Config\DriverConfig;
@@ -17,6 +18,7 @@ final class Factory
     /** @var array<string,class-string<BenchmarkClient>> */
     private const DRIVERS = [
         'valkey-glide-php' => ValkeyGlidePhpClient::class,
+        'phpredis' => PhpRedisClient::class,
         'recording' => RecordingClient::class,
     ];
 

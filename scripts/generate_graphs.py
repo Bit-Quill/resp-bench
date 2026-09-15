@@ -73,6 +73,7 @@ DRIVER_LANGUAGE_MAP = {
     "valkey-glide-csharp": "csharp",
     # PHP drivers
     "valkey-glide-php": "php",
+    "phpredis": "php",
     # Python drivers (future)
     "redis-py": "python",
     "aioredis": "python",

@@ -103,7 +103,7 @@ Thread-based system metrics collector that runs alongside benchmarks, collecting
 | Java | ✅ Ready | Jedis, Lettuce, Valkey-Glide, Redisson, Spring Data Valkey/Redis |
 | Ruby | ✅ Ready | redis-rb, valkey-glide-ruby |
 | C# | ✅ Ready | valkey-glide-csharp, StackExchange.Redis |
-| PHP | ✅ Ready | valkey-glide-php |
+| PHP | ✅ Ready | valkey-glide-php, PHPRedis |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 
 ## Project Structure

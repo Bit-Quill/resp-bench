@@ -428,9 +428,9 @@ php-integration-test:
 # default localhost:6379). Tests skip cleanly if either is missing.
 php-test-live:
 	cd php && if [ -f vendor/bin/phpunit ]; then \
-		vendor/bin/phpunit --testsuite integration --filter LiveClientTest; \
+		vendor/bin/phpunit --testsuite integration --filter 'LiveClientTest|PhpRedisLiveTest'; \
 	elif [ -f /tmp/phpunit.phar ]; then \
-		$(PHP) /tmp/phpunit.phar --testsuite integration --filter LiveClientTest; \
+		$(PHP) /tmp/phpunit.phar --testsuite integration --filter 'LiveClientTest|PhpRedisLiveTest'; \
 	else \
 		echo "PHPUnit not installed. Run 'make php-build' (composer) or download phpunit.phar."; \
 		exit 1; \

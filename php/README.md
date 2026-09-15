@@ -7,6 +7,7 @@ PHP implementation of the resp-bench benchmark suite for Redis/Valkey compatible
 | Driver ID | Package | Description |
 |-----------|---------|-------------|
 | `valkey-glide-php` | [ext-valkey_glide](https://github.com/valkey-io/valkey-glide-php) | Valkey GLIDE PHP client — Rust-core client exposed as a native PHP extension, with a PHPRedis-compatible API |
+| `phpredis` | [ext-redis](https://github.com/phpredis/phpredis) | PHPRedis — the de-facto standard PHP Redis/Valkey client (the incumbent comparison baseline) |
 | `recording` | (built-in) | In-memory driver for server-free tests and pipeline validation |
 
 ## Prerequisites
@@ -15,7 +16,8 @@ PHP implementation of the resp-bench benchmark suite for Redis/Valkey compatible
 - `ext-pcntl` (for the multi-process concurrency model; standard on Linux/macOS CLI builds)
 - `ext-json` (bundled with PHP)
 - Composer (recommended) — or use the bundled minimal autoloader
-- For live-server runs: the `valkey_glide` extension installed and enabled
+- For live-server runs: the `valkey_glide` extension (for `valkey-glide-php`) and/or
+  the `redis` extension (for `phpredis`) installed and enabled
 
 ### Installing the Valkey GLIDE PHP extension
 
@@ -36,6 +38,17 @@ php -m | grep valkey_glide
 
 The `recording` driver needs neither the extension nor a server, so unit and
 integration tests run without either.
+
+### Installing PHPRedis
+
+The `phpredis` driver requires the `redis` extension (ext-redis):
+
+```bash
+pecl install redis
+# then enable in php.ini:  extension=redis
+php -m | grep redis
+```
+
 
 ## Installation
 

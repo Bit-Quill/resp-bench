@@ -126,6 +126,7 @@ DRIVER_ENGINE_MAP = {
     "valkey-glide-csharp": "csharp",
     # PHP drivers
     "valkey-glide-php": "php",
+    "phpredis": "php",
     # Recording (default to java)
     "recording": "java",
 }

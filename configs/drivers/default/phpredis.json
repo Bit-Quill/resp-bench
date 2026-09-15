@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "PHPRedis (ext-redis) - default configuration",
+    "driver_id": "phpredis",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

@@ -1,0 +1,19 @@
+{
+    "description": "Compare PHP clients (Valkey GLIDE PHP vs PHPRedis) across client counts",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 5,
+    "dimensions": {
+        "connections": [
+            1,
+            2,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-php.json",
+            "configs/drivers/high-throughput/phpredis.json"
+        ]
+    }
+}
