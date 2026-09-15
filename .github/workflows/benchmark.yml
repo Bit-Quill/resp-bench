@@ -2,9 +2,20 @@ name: Benchmark
 
 on:
   workflow_dispatch:
+    inputs:
+      engines:
+        description: 'Which engine benchmarks to run'
+        type: choice
+        default: all
+        options:
+          - all
+          - java
+          - ruby
+          - node
 
 jobs:
   benchmark-java:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'java' }}
     runs-on: ubuntu-latest
     
     strategy:
@@ -85,6 +96,7 @@ jobs:
           retention-days: 30
 
   benchmark-ruby:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
     runs-on: ubuntu-latest
     
     strategy:
@@ -153,6 +165,7 @@ jobs:
           retention-days: 30
 
   benchmark-node:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'node' }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -227,6 +240,10 @@ jobs:
 
   generate-graphs:
     needs: [benchmark-java, benchmark-ruby, benchmark-node]
+    # A skipped `needs` job would skip this one by default, so an engine-scoped
+    # run would produce no graphs at all. Individual graph steps are gated on the
+    # same input instead.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -258,6 +275,7 @@ jobs:
 
       # TODO - rework with matrix orchistrator
       - name: Generate Java graphs - 1 Client
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'java' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-single-client-1M-reqs.ndjson" \
@@ -268,6 +286,7 @@ jobs:
             --commit-id ${{ github.sha }}
 
       - name: Generate Java graphs - 10 Clients
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'java' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-10-clients.ndjson" \
@@ -278,6 +297,7 @@ jobs:
             --commit-id ${{ github.sha }}
 
       - name: Generate Java graphs - 100 Clients
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'java' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-100-clients.ndjson" \
@@ -289,6 +309,7 @@ jobs:
 
       # Ruby graphs — per concurrency level
       - name: Generate Ruby graphs - 1 Client
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-single-client-1M-reqs.ndjson" \
@@ -299,6 +320,7 @@ jobs:
             --commit-id ${{ github.sha }}
 
       - name: Generate Ruby graphs - 10 Clients
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-10-clients.ndjson" \
@@ -309,6 +331,7 @@ jobs:
             --commit-id ${{ github.sha }}
 
       - name: Generate Ruby graphs - 100 Clients
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-100-clients.ndjson" \
@@ -316,6 +339,17 @@ jobs:
             --phase STEADY \
             --language ruby \
             --workload "Ruby - 100 Clients" \
+            --commit-id ${{ github.sha }}
+
+      - name: Generate Node.js graphs - 1 Client
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'node' }}
+        run: |
+          python scripts/generate_graphs.py \
+            --results "results/github-runner/reference/*-basic-standalone-single-client-1M-reqs.ndjson" \
+            --output graphs/node/1-client/ \
+            --phase STEADY \
+            --language node \
+            --workload "Node.js - 1 Client" \
             --commit-id ${{ github.sha }}
 
       - name: Upload graphs
