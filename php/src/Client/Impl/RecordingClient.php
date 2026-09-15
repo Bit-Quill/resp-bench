@@ -25,9 +25,34 @@ final class RecordingClient extends BenchmarkClient
 
     private bool $connected = false;
 
+    private float $errorRate = 0.0;
+    private string $errorMessage = 'Simulated error';
+
     public function connect(string $host, int $port, DriverConfig $config): void
     {
         $this->connected = true;
+
+        // Optional error simulation (parity with the Ruby recording client):
+        //   "specific_driver_config": { "error_rate": 0.1, "error_message": "..." }
+        $cfg = $config->specificDriverConfig;
+        if (isset($cfg['error_rate'])) {
+            $this->errorRate = max(0.0, min(1.0, (float) $cfg['error_rate']));
+        }
+        if (isset($cfg['error_message'])) {
+            $this->errorMessage = (string) $cfg['error_message'];
+        }
+    }
+
+    private function shouldFail(): bool
+    {
+        if ($this->errorRate <= 0.0) {
+            return false;
+        }
+        if ($this->errorRate >= 1.0) {
+            return true;
+        }
+
+        return (mt_rand() / mt_getrandmax()) < $this->errorRate;
     }
 
     public function isConnected(): bool
@@ -39,6 +64,9 @@ final class RecordingClient extends BenchmarkClient
     {
         return $this->measure(function (): string {
             $this->recorded[] = ['op' => 'PING', 'key' => '', 'size' => 0];
+            if ($this->shouldFail()) {
+                throw new \RuntimeException($this->errorMessage);
+            }
 
             return 'PONG';
         });
@@ -48,6 +76,9 @@ final class RecordingClient extends BenchmarkClient
     {
         return $this->measure(function () use ($key): ?string {
             $this->recorded[] = ['op' => 'GET', 'key' => $key, 'size' => 0];
+            if ($this->shouldFail()) {
+                throw new \RuntimeException($this->errorMessage);
+            }
 
             return $this->store[$key] ?? null;
         });
@@ -56,8 +87,11 @@ final class RecordingClient extends BenchmarkClient
     public function set(string $key, string $value): TimedResult
     {
         return $this->measure(function () use ($key, $value): string {
-            $this->store[$key] = $value;
             $this->recorded[] = ['op' => 'SET', 'key' => $key, 'size' => strlen($value)];
+            if ($this->shouldFail()) {
+                throw new \RuntimeException($this->errorMessage);
+            }
+            $this->store[$key] = $value;
 
             return 'OK';
         });
@@ -66,9 +100,12 @@ final class RecordingClient extends BenchmarkClient
     public function del(string $key): TimedResult
     {
         return $this->measure(function () use ($key): int {
+            $this->recorded[] = ['op' => 'DEL', 'key' => $key, 'size' => 0];
+            if ($this->shouldFail()) {
+                throw new \RuntimeException($this->errorMessage);
+            }
             $existed = isset($this->store[$key]);
             unset($this->store[$key]);
-            $this->recorded[] = ['op' => 'DEL', 'key' => $key, 'size' => 0];
 
             return $existed ? 1 : 0;
         });

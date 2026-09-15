@@ -34,7 +34,7 @@ WORK_DIR=$(shell pwd)/work
 	python-build python-test python-run python-clean \
 	ruby-build ruby-test ruby-run ruby-clean ruby-info \
 	csharp-build csharp-test csharp-run csharp-clean csharp-info \
-	php-build php-test php-integration-test php-run php-clean php-info \
+	php-build php-test php-integration-test php-test-live php-run php-clean php-info \
 	config-editor-build config-editor-dev
 
 # ============================================================================
@@ -418,6 +418,19 @@ php-integration-test:
 		vendor/bin/phpunit --testsuite integration; \
 	elif [ -f /tmp/phpunit.phar ]; then \
 		$(PHP) /tmp/phpunit.phar --testsuite integration; \
+	else \
+		echo "PHPUnit not installed. Run 'make php-build' (composer) or download phpunit.phar."; \
+		exit 1; \
+	fi
+
+# Live integration tests for the valkey-glide-php driver. Requires the
+# valkey_glide extension AND a reachable server (VALKEY_HOST/VALKEY_PORT,
+# default localhost:6379). Tests skip cleanly if either is missing.
+php-test-live:
+	cd php && if [ -f vendor/bin/phpunit ]; then \
+		vendor/bin/phpunit --testsuite integration --filter LiveClientTest; \
+	elif [ -f /tmp/phpunit.phar ]; then \
+		$(PHP) /tmp/phpunit.phar --testsuite integration --filter LiveClientTest; \
 	else \
 		echo "PHPUnit not installed. Run 'make php-build' (composer) or download phpunit.phar."; \
 		exit 1; \

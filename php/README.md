@@ -183,8 +183,11 @@ vendor/bin/phpunit --testsuite integration
 | `ConfigLoaderTest` | `tests/Unit/ConfigLoaderTest.php` | Driver/workload parsing, defaults, cluster mode |
 | `RateLimiterTest` | `tests/Unit/RateLimiterTest.php` | Leaky-bucket rate enforcement |
 | — | `tests/Unit/CommandSelectorTest.php` | Weighted command distribution |
-| `MetricsOutputTest` | `tests/Unit/HdrEncoderTest.php` | HDR percentiles + V2 compressed encoding structure |
+| `MetricsOutputTest` | `tests/Unit/HdrEncoderTest.php`, `tests/Integration/MetricsOutputTest.php` | HDR percentiles + V2 compressed encoding; NDJSON schema, exact request counts, latency accuracy |
+| `RateLimitingTest` | `tests/Integration/RateLimitingTest.php` | RPS enforcement, shared limit across (concurrent) connections, unlimited throughput |
+| `ErrorMetricsIntegrationTest` | `tests/Integration/ErrorMetricsTest.php` | Error-rate simulation, per-command error counts, errors excluded from latency histogram |
 | `RecordingBenchmarkClientTest` | `tests/Integration/RecordingWorkloadTest.php` | Full pipeline → NDJSON schema, inline + process modes |
+| `BenchmarkIntegrationTest` | `tests/Integration/LiveClientTest.php` | Live server: connect/ping/set-get, driver version, multi-process fork-then-connect (gated; skips without extension/server) |
 
 ## Adding a new driver
 
