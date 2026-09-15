@@ -7,7 +7,10 @@ This guide explains how to add support for a new programming language to resp-be
 Before adding a new language, ensure you understand:
 - [Architecture](ARCHITECTURE.md) - Overall system design
 - [Configuration Specification](CONFIG_SPECIFICATION.md) - Config format details
-- Existing implementations (Java is the reference implementation)
+- Existing implementations: **Java is the reference implementation**; Ruby, C# and
+  Node.js follow it. For an async/event-loop language, `node/` is the closest model
+  and its README documents the parity traps worth knowing up front (RNG width, HDR
+  encoding, percentile-vs-raw min/max, shared request budget).
 
 ## Step-by-Step Guide
 
@@ -178,9 +181,10 @@ class MetricsCollector:
     
     def record(self, command: str, latency_us: int, success: bool) -> None:
         if command not in self.command_metrics:
-            # 1µs to 1 hour, 3 significant figures
+            # 1µs to 600s, 3 significant figures (must match the other engines:
+            # Java/C#/Ruby/Node all use a max of 600_000_000µs, not 1 hour)
             self.command_metrics[command] = CommandMetrics(
-                histogram=HdrHistogram(1, 3600000000, 3)
+                histogram=HdrHistogram(1, 600000000, 3)
             )
         
         metrics = self.command_metrics[command]
@@ -389,9 +393,28 @@ Before submitting a new language engine:
 
 - [ ] Config parsing handles all schema fields
 - [ ] Key generator produces identical sequences (test with seed=12345)
+- [ ] Keys are zero-padded to `key_size_bytes` (Java: `"%0" + max(1, key_size_bytes - prefix.length) + "d"`)
+- [ ] The `uniform_rand` PRNG matches `java.util.Random` **including** the int32
+      overflow check in `nextInt`'s rejection branch. Watch the arithmetic width:
+      the 48-bit LCG multiply exceeds what a double-based number type holds exactly
+      (this bites JavaScript, where `BigInt` is required)
+- [ ] `sequential_int` uses a counter **shared** across all workers; `uniform_rand`
+      uses a per-worker PRNG seeded `base_seed + worker_index`
+- [ ] The request budget is **shared** across workers and claimed one request at a
+      time, not pre-divided per worker (Java: one `AtomicLong` per phase)
+- [ ] PING does **not** consume a generated key (Java's `PingCommand` ignores the
+      key generator, so consuming one shifts every subsequent key)
 - [ ] Rate limiter achieves target rates within 5% tolerance
 - [ ] Metrics output matches NDJSON schema exactly
-- [ ] HdrHistogram produces compatible base64 payloads
+- [ ] HdrHistogram produces compatible base64 payloads. If your library's encode
+      already returns base64, use it **directly** — encoding it again yields a
+      payload Java and Ruby cannot decode
+- [ ] `summary.min`/`max` match Java's `getMinValue()`/`getMaxValue()`, which return
+      the *bucket's* equivalent bounds. Many ports expose a raw min/max property
+      instead; those diverge above ~1000µs at 3 significant figures. Prefer
+      `getValueAtPercentile(0)` / `getValueAtPercentile(100)`
+- [ ] `warmup_requests`, `cps_limit`, `rps_limit`, `pipeline_depth`,
+      `command_timeout_ms`, `tls` and `auth` are all actually honoured, not just parsed
 - [ ] All unit tests pass
 - [ ] Integration tests pass against live server
 - [ ] Documentation complete

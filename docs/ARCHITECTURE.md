@@ -156,6 +156,18 @@ class BenchmarkClient(ABC):
     async def close(self): ...
 ```
 
+**Node.js (TypeScript):**
+```typescript
+interface BenchmarkClient {
+  connect(host: string, port: number, config: DriverConfig): Promise<void>;
+  ping(): Promise<TimedResult<string>>;
+  get(key: string): Promise<TimedResult<string>>;
+  set(key: string, value: Buffer): Promise<TimedResult<string>>;
+  close(): Promise<void>;
+  driverVersion(): string;
+}
+```
+
 ## Metrics Output Format
 
 All engines produce identical NDJSON output:
@@ -236,9 +248,14 @@ Different languages use appropriate concurrency primitives:
 | C#       | Task-per-client with async/await (.NET 8+)      |
 | Python   | asyncio with async/await                        |
 | Go       | goroutines and channels                         |
-| Node.js  | Promise/async-await                             |
+| Node.js  | One event loop, worker-per-connection (Promise/async-await) |
 
 The key requirement is that N connections can operate concurrently, each potentially with pipeline_depth in-flight requests.
+
+**Node.js caveat:** the engine is single-threaded, so one CPU core bounds the whole
+run. Past that point measurements reflect the engine rather than the client. See
+[BENCHMARKS_NODE.md](BENCHMARKS_NODE.md) § "The Single-Core Ceiling" for the
+measured plateau and how to tell when you have hit it.
 
 ## Parallel Command Issuers (Java)
 

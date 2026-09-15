@@ -2,9 +2,21 @@ name: Benchmark
 
 on:
   workflow_dispatch:
+    inputs:
+      engines:
+        description: 'Which engine benchmarks to run'
+        type: choice
+        default: all
+        options:
+          - all
+          - java
+          - ruby
+          - node
+          - php
 
 jobs:
   benchmark-java:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'java' }}
     runs-on: ubuntu-latest
     
     strategy:
@@ -85,6 +97,7 @@ jobs:
           retention-days: 30
 
   benchmark-ruby:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
     runs-on: ubuntu-latest
     
     strategy:
@@ -155,6 +168,7 @@ jobs:
   test-php:
     # Fast, server-free PHP engine tests. Uses the recording driver, so it needs
     # neither the valkey_glide extension nor a running server.
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'php' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -176,6 +190,7 @@ jobs:
         run: cd php && vendor/bin/phpunit --testsuite integration
 
   benchmark-php:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'php' }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -266,8 +281,86 @@ jobs:
           path: ${{ steps.names.outputs.result_file }}
           retention-days: 30
 
+  benchmark-node:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'node' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        driver:
+          - configs/drivers/default/valkey-glide-node.json
+          - configs/drivers/default/ioredis.json
+          - configs/drivers/default/iovalkey.json
+        workload:
+          - configs/workloads/reference/basic-standalone-single-client-1M-reqs.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22 LTS: ioredis 6 and node-redis 6 both require >= 20, and 18 is EOL.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: node/package-lock.json
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Start Valkey server
+        run: |
+          # Use Makefile target which builds from source and configures with persistence disabled
+          make server-standalone-start
+          # Wait for server to be ready
+          sleep 2
+          # Verify server is up and persistence is disabled
+          work/valkey/bin/valkey-cli ping
+          work/valkey/bin/valkey-cli CONFIG GET save
+
+      - name: Build Node.js benchmark
+        run: cd node && npm ci && npm run build
+
+      - name: Extract names for result file
+        id: names
+        run: |
+          DRIVER_NAME=$(basename ${{ matrix.driver }} .json)
+          WORKLOAD_NAME=$(basename ${{ matrix.workload }} .json)
+          echo "driver_name=$DRIVER_NAME" >> $GITHUB_OUTPUT
+          echo "workload_name=$WORKLOAD_NAME" >> $GITHUB_OUTPUT
+          echo "result_file=results/github-runner/reference/${DRIVER_NAME}-${WORKLOAD_NAME}.ndjson" >> $GITHUB_OUTPUT
+
+      - name: Run benchmark
+        run: |
+          mkdir -p results/github-runner/reference
+          node node/dist/src/cli.js \
+            --server localhost:6379 \
+            --driver ${{ matrix.driver }} \
+            --workload ${{ matrix.workload }} \
+            --metrics ${{ steps.names.outputs.result_file }} \
+            --commit-id ${{ github.sha }}
+
+      - name: Stop Valkey server
+        if: always()
+        run: |
+          make server-standalone-stop || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-node-${{ steps.names.outputs.driver_name }}-${{ steps.names.outputs.workload_name }}
+          path: ${{ steps.names.outputs.result_file }}
+          retention-days: 30
+
   generate-graphs:
-    needs: [benchmark-java, benchmark-ruby, benchmark-php]
+    needs: [benchmark-java, benchmark-ruby, benchmark-php, benchmark-node]
+    # A skipped `needs` job would skip this one by default, so an engine-scoped
+    # run would produce no graphs at all. Individual graph steps are gated on the
+    # same input instead.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -299,6 +392,7 @@ jobs:
 
       # TODO - rework with matrix orchistrator
       - name: Generate Java graphs - 1 Client
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'java' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-single-client-1M-reqs.ndjson" \
@@ -309,6 +403,7 @@ jobs:
             --commit-id ${{ github.sha }}
 
       - name: Generate Java graphs - 10 Clients
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'java' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-10-clients.ndjson" \
@@ -319,6 +414,7 @@ jobs:
             --commit-id ${{ github.sha }}
 
       - name: Generate Java graphs - 100 Clients
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'java' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-100-clients.ndjson" \
@@ -330,6 +426,7 @@ jobs:
 
       # Ruby graphs — per concurrency level
       - name: Generate Ruby graphs - 1 Client
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-single-client-1M-reqs.ndjson" \
@@ -340,6 +437,7 @@ jobs:
             --commit-id ${{ github.sha }}
 
       - name: Generate Ruby graphs - 10 Clients
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-10-clients.ndjson" \
@@ -350,6 +448,7 @@ jobs:
             --commit-id ${{ github.sha }}
 
       - name: Generate Ruby graphs - 100 Clients
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
         run: |
           python scripts/generate_graphs.py \
             --results "results/github-runner/reference/*-basic-standalone-100-clients.ndjson" \
@@ -357,6 +456,17 @@ jobs:
             --phase STEADY \
             --language ruby \
             --workload "Ruby - 100 Clients" \
+            --commit-id ${{ github.sha }}
+
+      - name: Generate Node.js graphs - 1 Client
+        if: ${{ inputs.engines == 'all' || inputs.engines == 'node' }}
+        run: |
+          python scripts/generate_graphs.py \
+            --results "results/github-runner/reference/*-basic-standalone-single-client-1M-reqs.ndjson" \
+            --output graphs/node/1-client/ \
+            --phase STEADY \
+            --language node \
+            --workload "Node.js - 1 Client" \
             --commit-id ${{ github.sha }}
 
       - name: Upload graphs

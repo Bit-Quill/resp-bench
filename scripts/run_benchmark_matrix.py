@@ -127,6 +127,10 @@ DRIVER_ENGINE_MAP = {
     # PHP drivers
     "valkey-glide-php": "php",
     "phpredis": "php",
+    # Node.js drivers
+    "valkey-glide-node": "node",
+    "ioredis": "node",
+    "iovalkey": "node",
     # Recording (default to java)
     "recording": "java",
 }

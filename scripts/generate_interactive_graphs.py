@@ -680,6 +680,11 @@ DRIVER_COLORS = {
     # C# (.NET) drivers — cyan/pink
     "stackexchange-redis": "#00ACC1",  # cyan 600
     "valkey-glide-csharp": "#D81B60",  # pink 600
+
+    # Node.js drivers — yellows/browns
+    "valkey-glide-node": "#F9A825",  # yellow 800
+    "ioredis":           "#6D4C41",  # brown 600
+    "iovalkey":          "#546E7A",  # blue grey 600
 }
 
 DRIVER_FAMILIES = {
@@ -694,15 +699,19 @@ DRIVER_FAMILIES = {
     "redisson":                   "low-level",
     "stackexchange-redis":        "csharp",
     "valkey-glide-csharp":        "csharp",
+    "valkey-glide-node":          "node",
+    "ioredis":                    "node",
+    "iovalkey":                   "node",
 }
 
-FAMILY_ORDER = ["spring-data-valkey", "spring-data-redis", "low-level", "csharp"]
+FAMILY_ORDER = ["spring-data-valkey", "spring-data-redis", "low-level", "csharp", "node"]
 
 FAMILY_LABELS = {
     "spring-data-valkey": "Spring Data Valkey",
     "spring-data-redis":  "Spring Data Redis",
     "low-level":          "Low-Level Java Drivers",
     "csharp":             "C# (.NET) Drivers",
+    "node":               "Node.js Drivers",
 }
 
 # Fallback color for unknown drivers

@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "iovalkey client - default configuration",
+    "driver_id": "iovalkey",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}
