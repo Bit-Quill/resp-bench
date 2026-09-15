@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "Recording client - server-free (PHP engine tests)",
+    "driver_id": "recording",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

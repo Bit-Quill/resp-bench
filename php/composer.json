@@ -1,0 +1,33 @@
+{
+    "name": "valkey-io/resp-bench-php",
+    "description": "PHP benchmark engine for resp-bench (RESP protocol / Valkey / Redis)",
+    "type": "project",
+    "license": "Apache-2.0",
+    "require": {
+        "php": ">=8.2",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "suggest": {
+        "ext-valkey_glide": "Valkey GLIDE PHP client extension (required for the valkey-glide-php driver)",
+        "ext-pcntl": "Process control (required for the multi-process concurrency model on live-server runs)"
+    },
+    "autoload": {
+        "psr-4": {
+            "RespBench\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "RespBench\\Tests\\": "tests/"
+        }
+    },
+    "bin": [
+        "bin/resp-bench"
+    ],
+    "config": {
+        "optimize-autoloader": true
+    }
+}

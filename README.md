@@ -103,6 +103,7 @@ Thread-based system metrics collector that runs alongside benchmarks, collecting
 | Java | ✅ Ready | Jedis, Lettuce, Valkey-Glide, Redisson, Spring Data Valkey/Redis |
 | Ruby | ✅ Ready | redis-rb, valkey-glide-ruby |
 | C# | ✅ Ready | valkey-glide-csharp, StackExchange.Redis |
+| PHP | ✅ Ready | valkey-glide-php |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 
 ## Project Structure
@@ -133,6 +134,7 @@ resp-bench/
 ├── java/                        # Java benchmark engine
 ├── ruby/                        # Ruby benchmark engine
 ├── csharp/                      # C# (.NET 10) benchmark engine
+├── php/                         # PHP benchmark engine
 ├── docs/
 │   ├── ARCHITECTURE.md          # System architecture
 │   ├── BENCHMARK_MATRIX.md      # Matrix orchestrator docs
@@ -140,7 +142,8 @@ resp-bench/
 │   ├── CONFIG_SPECIFICATION.md  # Configuration format spec
 │   ├── BENCHMARKS_JAVA.md       # Java benchmark details
 │   ├── BENCHMARKS_CSHARP.md     # C# benchmark details
-│   └── BENCHMARKS_RUBY.md       # Ruby benchmark details
+│   ├── BENCHMARKS_RUBY.md       # Ruby benchmark details
+│   └── BENCHMARKS_PHP.md        # PHP benchmark details
 └── graphs/interactive/          # Generated HTML graphs
 ```
 
@@ -197,6 +200,7 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make java-test` | Run Java unit tests |
 | `make ruby-test` | Run Ruby tests |
 | `make csharp-test` | Run C# tests |
+| `make php-test` | Run PHP unit tests |
 
 ### Engines
 
@@ -205,6 +209,7 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make java-run` | Run Java engine (DRIVER, WORKLOAD, SERVER) |
 | `make ruby-run` | Run Ruby engine (DRIVER, WORKLOAD, SERVER) |
 | `make csharp-run` | Run C# engine (DRIVER, WORKLOAD, SERVER) |
+| `make php-run` | Run PHP engine (DRIVER, WORKLOAD, SERVER) |
 | `make java-build` | Build Java JAR |
 | `make csharp-build` | Build C# executable |
 
