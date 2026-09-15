@@ -1,0 +1,23 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Prefer composer's autoloader; fall back to the minimal PSR-4 autoloader.
+$autoloaders = [
+    __DIR__ . '/../vendor/autoload.php',
+];
+$loaded = false;
+foreach ($autoloaders as $file) {
+    if (is_file($file)) {
+        require $file;
+        $loaded = true;
+        break;
+    }
+}
+if (!$loaded) {
+    fwrite(STDERR, "Autoloader not found. Run `composer install` in php/.\n");
+    exit(2);
+}
+
+exit((new RespBench\Cli())->run($argv));

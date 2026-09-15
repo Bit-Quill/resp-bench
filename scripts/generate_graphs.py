@@ -71,6 +71,9 @@ DRIVER_LANGUAGE_MAP = {
     # C# drivers
     "stackexchange-redis": "csharp",
     "valkey-glide-csharp": "csharp",
+    # PHP drivers
+    "valkey-glide-php": "php",
+    "phpredis": "php",
     # Node.js drivers
     "valkey-glide-node": "node",
     "ioredis": "node",

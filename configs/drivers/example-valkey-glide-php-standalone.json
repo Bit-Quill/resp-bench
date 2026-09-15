@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "Valkey GLIDE PHP client - standalone mode",
+    "driver_id": "valkey-glide-php",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

@@ -12,6 +12,7 @@ on:
           - java
           - ruby
           - node
+          - php
 
 jobs:
   benchmark-java:
@@ -164,6 +165,122 @@ jobs:
           path: ${{ steps.names.outputs.result_file }}
           retention-days: 30
 
+  test-php:
+    # Fast, server-free PHP engine tests. Uses the recording driver, so it needs
+    # neither the valkey_glide extension nor a running server.
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'php' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: json, pcntl
+          tools: composer
+
+      - name: Install PHP dependencies
+        run: cd php && composer install --no-interaction --prefer-dist
+
+      - name: Run PHP unit tests
+        run: cd php && vendor/bin/phpunit --testsuite unit
+
+      - name: Run PHP integration tests (server-free)
+        run: cd php && vendor/bin/phpunit --testsuite integration
+
+  benchmark-php:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'php' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        driver:
+          - configs/drivers/default/valkey-glide-php.json
+        workload:
+          - configs/workloads/reference/basic-standalone-single-client-1M-reqs.json
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: json, pcntl, bcmath
+          tools: composer
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential php-dev pkg-config \
+            libssl-dev libffi-dev libprotobuf-c-dev protobuf-c-compiler unzip
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cbindgen
+        run: cargo install cbindgen
+
+      - name: Build & install valkey_glide extension
+        run: |
+          # Build the Valkey GLIDE PHP extension from the upstream repo.
+          git clone --recurse-submodules https://github.com/valkey-io/valkey-glide-php.git /tmp/vg-php
+          cd /tmp/vg-php
+          python3 utils/patch_proto_and_rust.py
+          (cd valkey-glide/ffi && cargo build --release)
+          phpize
+          ./configure --enable-valkey-glide
+          make build-modules-pre
+          make -j"$(nproc)"
+          sudo make install
+          echo "extension=valkey_glide" | sudo tee -a "$(php -i | grep '^Loaded Configuration File' | awk '{print $NF}')"
+          php -m | grep valkey_glide
+
+      - name: Install PHP dependencies
+        run: cd php && composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Start Valkey server
+        run: |
+          make server-standalone-start
+          sleep 2
+          work/valkey/bin/valkey-cli ping
+          work/valkey/bin/valkey-cli CONFIG GET save
+
+      - name: Extract names for result file
+        id: names
+        run: |
+          DRIVER_NAME=$(basename ${{ matrix.driver }} .json)
+          WORKLOAD_NAME=$(basename ${{ matrix.workload }} .json)
+          echo "driver_name=$DRIVER_NAME" >> $GITHUB_OUTPUT
+          echo "workload_name=$WORKLOAD_NAME" >> $GITHUB_OUTPUT
+          echo "result_file=results/github-runner/reference/${DRIVER_NAME}-${WORKLOAD_NAME}.ndjson" >> $GITHUB_OUTPUT
+
+      - name: Run benchmark
+        run: |
+          mkdir -p results/github-runner/reference
+          php php/bin/resp-bench \
+            --server localhost:6379 \
+            --driver ${{ matrix.driver }} \
+            --workload ${{ matrix.workload }} \
+            --metrics ${{ steps.names.outputs.result_file }} \
+            --commit-id ${{ github.sha }}
+
+      - name: Stop Valkey server
+        if: always()
+        run: |
+          make server-standalone-stop || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-php-${{ steps.names.outputs.driver_name }}-${{ steps.names.outputs.workload_name }}
+          path: ${{ steps.names.outputs.result_file }}
+          retention-days: 30
+
   benchmark-node:
     if: ${{ inputs.engines == 'all' || inputs.engines == 'node' }}
     runs-on: ubuntu-latest
@@ -239,7 +356,7 @@ jobs:
           retention-days: 30
 
   generate-graphs:
-    needs: [benchmark-java, benchmark-ruby, benchmark-node]
+    needs: [benchmark-java, benchmark-ruby, benchmark-php, benchmark-node]
     # A skipped `needs` job would skip this one by default, so an engine-scoped
     # run would produce no graphs at all. Individual graph steps are gated on the
     # same input instead.
