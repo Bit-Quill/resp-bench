@@ -13,6 +13,7 @@ A multi-language benchmark suite for RESP protocol (Redis/Valkey) compatible dat
 ### Prerequisites
 
 - Python 3.8+, Java 21+, Maven
+- Node.js 20+ (for the Node.js engine)
 - Make
 - A server CLI (`valkey-cli`) for the matrix runner's readiness probe and per-cell
   FLUSHALL — the Makefile's `server-*` targets build one into
@@ -103,6 +104,7 @@ Thread-based system metrics collector that runs alongside benchmarks, collecting
 | Java | ✅ Ready | Jedis, Lettuce, Valkey-Glide, Redisson, Spring Data Valkey/Redis |
 | Ruby | ✅ Ready | redis-rb, valkey-glide-ruby |
 | C# | ✅ Ready | valkey-glide-csharp, StackExchange.Redis |
+| Node.js | ✅ Ready | valkey-glide-node, ioredis, iovalkey |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 
 ## Project Structure
@@ -133,6 +135,7 @@ resp-bench/
 ├── java/                        # Java benchmark engine
 ├── ruby/                        # Ruby benchmark engine
 ├── csharp/                      # C# (.NET 10) benchmark engine
+├── node/                        # Node.js (TypeScript) benchmark engine
 ├── docs/
 │   ├── ARCHITECTURE.md          # System architecture
 │   ├── BENCHMARK_MATRIX.md      # Matrix orchestrator docs
@@ -140,7 +143,8 @@ resp-bench/
 │   ├── CONFIG_SPECIFICATION.md  # Configuration format spec
 │   ├── BENCHMARKS_JAVA.md       # Java benchmark details
 │   ├── BENCHMARKS_CSHARP.md     # C# benchmark details
-│   └── BENCHMARKS_RUBY.md       # Ruby benchmark details
+│   ├── BENCHMARKS_RUBY.md       # Ruby benchmark details
+│   └── BENCHMARKS_NODE.md       # Node.js benchmark details
 └── graphs/interactive/          # Generated HTML graphs
 ```
 
@@ -197,6 +201,7 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make java-test` | Run Java unit tests |
 | `make ruby-test` | Run Ruby tests |
 | `make csharp-test` | Run C# tests |
+| `make node-test` | Run Node.js tests (unit + integration) |
 
 ### Engines
 
@@ -205,8 +210,10 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make java-run` | Run Java engine (DRIVER, WORKLOAD, SERVER) |
 | `make ruby-run` | Run Ruby engine (DRIVER, WORKLOAD, SERVER) |
 | `make csharp-run` | Run C# engine (DRIVER, WORKLOAD, SERVER) |
+| `make node-run` | Run Node.js engine (DRIVER, WORKLOAD, SERVER) |
 | `make java-build` | Build Java JAR |
 | `make csharp-build` | Build C# executable |
+| `make node-build` | Install deps and compile the Node.js engine |
 
 ### Server Management
 

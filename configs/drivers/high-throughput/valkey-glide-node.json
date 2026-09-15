@@ -1,0 +1,8 @@
+{
+    "schema_version": "1.0",
+    "description": "Valkey GLIDE for Node.js client - high-throughput configuration",
+    "driver_id": "valkey-glide-node",
+    "mode": "standalone",
+    "specific_driver_config": {},
+    "command_timeout_ms": 10000
+}

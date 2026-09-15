@@ -124,6 +124,10 @@ DRIVER_ENGINE_MAP = {
     # C# drivers
     "stackexchange-redis": "csharp",
     "valkey-glide-csharp": "csharp",
+    # Node.js drivers
+    "valkey-glide-node": "node",
+    "ioredis": "node",
+    "iovalkey": "node",
     # Recording (default to java)
     "recording": "java",
 }

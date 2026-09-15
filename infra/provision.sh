@@ -214,6 +214,35 @@ env_add "export DOTNET_NOLOGO=1"
 "${DOTNET_ROOT}/dotnet" --info 2>&1 | head -n3 | sed 's/^/[provision]   /' || true
 
 # ═════════════════════════════════════════════════════════════════════════════
+# LANGUAGE: Node.js (20+) — engines: valkey-glide-node, ioredis, iovalkey.
+#   node/package.json declares "engines": {"node": ">=20"}; distro feeds often
+#   ship 18 (EOL) or older, so install from NodeSource, which is version-pinned
+#   and works on both dnf and apt. valkey-glide ships prebuilt native binaries
+#   per platform, so no compiler is needed beyond build-essential (already
+#   installed above for the server build).
+# ═════════════════════════════════════════════════════════════════════════════
+
+NODE_MAJOR="${NODE_MAJOR:-22}"
+log "LANGUAGE: Node.js — installing Node ${NODE_MAJOR} + npm"
+node_major_installed() {
+  command -v node >/dev/null 2>&1 &&
+    [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 20 ]
+}
+if ! node_major_installed; then
+  if [ "${PKG}" = "dnf" ]; then
+    curl -fsSL "https://rpm.nodesource.com/setup_${NODE_MAJOR}.x" | ${SUDO} bash -
+    pkg_install nodejs -- nodejs
+  else
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | ${SUDO} bash -
+    pkg_install nodejs -- nodejs
+  fi
+else
+  log "Node.js $(node -v) already present (>= 20)"
+fi
+node -v 2>&1 | sed 's/^/[provision]   /' || true
+npm -v 2>&1 | sed 's/^/[provision]   /' || true
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LANGUAGE: Python (3.9+ + pip) — used by the matrix orchestrator and graph
 #   generator (scripts/*.py). Engine deps are installed from the repo's pinned
 #   requirements files when present.
@@ -241,7 +270,6 @@ python --version 2>&1 | sed 's/^/[provision]   /' || true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FUTURE ENGINES (leave room — see resp-bench plan §5.5):
-#   Node.js (#13): pkg_install nodejs npm -- nodejs npm  + `npm ci` warm-up
 #   Go (#14):      install the Go toolchain + `go mod download`
 #   PHP (#15):     pkg_install php php-cli composer -- php-cli composer
 # Add each as its own "LANGUAGE:" block above, mirroring the pattern.
@@ -295,6 +323,8 @@ if [ "${SKIP_WARM_CACHES:-0}" != "1" ]; then
   make -C "${REPO_DIR}" ruby-build || log "WARNING: Ruby warm-up build failed (see above)"
   log "warming C# build cache (dotnet build)"
   make -C "${REPO_DIR}" csharp-build || log "WARNING: C# warm-up build failed (see above)"
+  log "warming Node.js deps (npm ci + tsc)"
+  make -C "${REPO_DIR}" node-build || log "WARNING: Node.js warm-up build failed (see above)"
 else
   log "SKIP_WARM_CACHES=1 — skipping engine cache warm-up"
 fi

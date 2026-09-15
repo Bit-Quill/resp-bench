@@ -1,0 +1,8 @@
+{
+    "schema_version": "1.0",
+    "description": "ioredis client - high-throughput configuration",
+    "driver_id": "ioredis",
+    "mode": "standalone",
+    "specific_driver_config": {},
+    "command_timeout_ms": 10000
+}
