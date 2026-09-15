@@ -122,7 +122,10 @@ def parse_args():
     )
     parser.add_argument(
         "--language",
-        choices=["java", "ruby", "csharp", "python"],
+        # Keep in sync with the values in DRIVER_LANGUAGE_MAP — argparse rejects
+        # anything not listed here, so a language added to the map alone fails at
+        # the CLI rather than silently producing empty graphs.
+        choices=["java", "ruby", "csharp", "node", "python"],
         help="Filter results by language (only include drivers for this language)",
     )
     parser.add_argument(
