@@ -57,16 +57,23 @@ class NdjsonWriter:
         status: str,
         connections: int,
         collector: MetricsCollector,
+        pipeline_depth: int = 1,
+        sockets_per_client: int = 1,
     ) -> None:
         parent = os.path.dirname(self._output_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
 
-        payload = self._build_phase_json(phase_id, status, connections, collector)
+        payload = self._build_phase_json(
+            phase_id, status, connections, collector, pipeline_depth, sockets_per_client
+        )
         with open(self._output_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload) + "\n")
 
-    def _build_phase_json(self, phase_id, status, connections, collector) -> dict:
+    def _build_phase_json(
+        self, phase_id, status, connections, collector, pipeline_depth=1,
+        sockets_per_client=1,
+    ) -> dict:
         result: dict = {}
 
         if self._commit_id or self._driver_id:
@@ -97,6 +104,19 @@ class NdjsonWriter:
             "finish_timestamp": _iso8601_utc(collector.end_time),
             "duration_ms": collector.duration_millis(),
             "connections": connections,
+            # Additive, optional: `connections` alone cannot distinguish a
+            # pipelined run from a serial one, and the concurrency actually
+            # applied is connections x pipeline_depth. The other engines omit the
+            # key and downstream tooling reads by key, so it is ignored there.
+            "pipeline_depth": pipeline_depth,
+            # Server-side sockets each client holds: 1 for a multiplexing driver
+            # at any depth, `pipeline_depth` for a pooling one. Without this,
+            # `connections` is the only socket signal in the output, and it is
+            # wrong for pooling drivers at depth > 1 -- the matrix runner sweeps
+            # `connections` as the graph x-axis, so two rows with the same x can
+            # represent different numbers of real connections.
+            "sockets_per_client": sockets_per_client,
+            "total_sockets": connections * sockets_per_client,
         }
 
         result["totals"] = {

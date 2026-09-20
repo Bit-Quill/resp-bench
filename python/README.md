@@ -21,13 +21,35 @@ equivalent (same RESP version, same retry policy, same command timeout). A
 
 ## Execution model
 
-The engine is asyncio-based. For a phase with `connections = N`, it creates
-**N client instances** (one client per connection — the `client == connection`
-invariant shared by every engine) and runs **N worker coroutines** concurrently
-on a single event loop. Each worker awaits one command at a time, i.e.
-`pipeline_depth = 1` — the faithful async analogue of the Java/Ruby
-"one in-flight request per connection" model, keeping results comparable across
-engines.
+The engine is asyncio-based. For a phase with `connections = N` and
+`pipeline_depth = D`, it creates **N client instances** (one client per
+connection — the `client == connection` invariant shared by every engine) and
+runs **N × D worker coroutines** concurrently on a single event loop. Each worker
+awaits one command at a time, so a connection has up to `D` requests in flight.
+At the default `D = 1` this is the async analogue of the Java/Ruby "one
+in-flight request per connection" model.
+
+Each connection owns one key generator and one command selector, shared by its
+`D` slots, so raising `pipeline_depth` changes how many requests are outstanding
+but not which keys a connection touches. That mirrors the C# engine, where one
+worker owns the generator for all of its pipeline slots.
+
+### What `pipeline_depth > 1` costs, per driver
+
+The concurrency is the same; the physical cost is not, so each driver records its
+mechanism as `pipelining` in the metrics metadata:
+
+| Driver | Mechanism | Sockets per client |
+|---|---|---|
+| `valkey-glide-python` | multiplexed over one socket | 1 |
+| `redis-py` | one pooled connection per in-flight command | up to `pipeline_depth` |
+
+redis-py cannot give real depth on a single socket: `single_connection_client`
+serialises behind a lock, and `pipeline()` batches N commands into one round trip
+with one shared latency — a different measurement. Its pool is therefore capped
+at `pipeline_depth`, so a connection can never quietly become more sockets than
+the phase asked for. **Compare `redis-py` depth>1 numbers against GLIDE depth>1
+with that difference in mind; they are not the same experiment.**
 
 This one-client-per-connection mapping is this engine's baseline; it is not a
 property of the whole suite (among other engines' drivers, `lettuce` and
@@ -39,16 +61,21 @@ favour of keeping this baseline.
 
 ### Known limits
 
-- **`pipeline_depth > 1`** (multiple in-flight requests per connection) is not
-  implemented; such a phase runs at depth 1 and logs a warning.
-- **Single event loop.** Above ~128 connections the event loop, not the driver,
-  becomes the bottleneck, and loop queuing delay is attributed to the driver in
-  the reported latency. The engine warns past that threshold. The Java engine hit
-  the same ceiling with one command-issuing thread and added multiple issuer
-  threads; this engine has no equivalent yet, so high-connection-count Python
-  numbers are not directly comparable to other engines.
+- **Single event loop.** Above ~128 concurrent in-flight requests
+  (`connections × pipeline_depth`) the event loop, not the driver, becomes the
+  bottleneck, and loop queuing delay is attributed to the driver in the reported
+  latency. The engine warns past that threshold. The Java engine hit the same
+  ceiling with one command-issuing thread and added multiple issuer threads; this
+  engine has no equivalent yet, so results above the threshold are not directly
+  comparable to other engines.
 
 ## Installation
+
+Requires Python 3.10+ (tested on 3.10, 3.11 and 3.12) and a **C compiler**:
+`hdrhistogram` publishes no wheels, so pip builds it from source. GitHub's
+`ubuntu-latest` and a normal macOS dev box already have one; a slim container
+does not (`pip install` fails with `command 'gcc' failed: No such file or
+directory` — `apt-get install gcc` fixes it).
 
 ```bash
 pip install -e .

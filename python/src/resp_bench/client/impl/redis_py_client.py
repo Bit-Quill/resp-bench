@@ -10,6 +10,8 @@ latency instead of as an error.
 
 from __future__ import annotations
 
+import asyncio
+
 from ...config.driver_config import DriverConfig
 from ..benchmark_client import AsyncBenchmarkClient
 from ..timed_result import TimedResult
@@ -35,6 +37,12 @@ class RedisPyClient(AsyncBenchmarkClient):
             "protocol": 3,
             "retry": Retry(NoBackoff(), 0),
             "retry_on_error": [],
+            # redis-py serves every command from an internal pool, so concurrent
+            # commands (pipeline_depth > 1) each check out their own socket. The
+            # pool is capped at the declared depth so a "connection" can never
+            # become more sockets than the phase asked for; at depth 1 this pins
+            # it to exactly one socket, which is what the other drivers do.
+            "max_connections": self._max_in_flight,
         }
 
         if config.tls_enabled():
@@ -66,6 +74,24 @@ class RedisPyClient(AsyncBenchmarkClient):
         # Establish the connection eagerly so failures surface at connect time.
         await self._client.ping()
 
+    def sockets_per_client(self) -> int:
+        # The pool is capped at the declared depth, and prime() fills it, so this
+        # is the real number of server connections this client holds.
+        return self._max_in_flight
+
+    async def prime(self) -> None:
+        """Materialise the whole pool before the measured window.
+
+        redis-py creates a pooled connection on first use, so at depth N only one
+        socket exists after connect(). Issuing N concurrent PINGs forces all N to
+        be created and handshaked now -- otherwise the first N-1 requests of the
+        benchmark each pay a TCP connect plus HELLO. This runs regardless of
+        `warmup_requests`, which a workload is allowed to set to 0.
+        """
+        if self._max_in_flight <= 1:
+            return
+        await asyncio.gather(*(self._client.ping() for _ in range(self._max_in_flight)))
+
     async def ping(self) -> TimedResult:
         return await self._measure(lambda: self._client.ping())
 
@@ -95,7 +121,14 @@ class RedisPyClient(AsyncBenchmarkClient):
         Which response parser redis-py picks depends on whether the optional C
         extension (hiredis) is importable, so it is recorded rather than assumed.
         """
-        details = {"resp_protocol": 3, "retries": 0, "response_parser": "unknown"}
+        details = {
+            "resp_protocol": 3,
+            "retries": 0,
+            "response_parser": "unknown",
+            # How this driver achieves pipeline_depth > 1, which is not the same
+            # mechanism GLIDE uses -- see the note in the engine docstring.
+            "pipelining": "connection-pool (up to pipeline_depth sockets per client)",
+        }
         try:
             # RedisCluster has no connection_pool; it manages pools per node.
             pool = getattr(self._client, "connection_pool", None)

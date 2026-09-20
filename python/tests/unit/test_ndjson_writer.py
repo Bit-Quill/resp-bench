@@ -42,6 +42,7 @@ def test_ndjson_schema(tmp_path):
     assert obj["phase"]["id"] == "STEADY"
     assert obj["phase"]["status"] == "COMPLETED"
     assert obj["phase"]["connections"] == 4
+    assert obj["phase"]["pipeline_depth"] == 1
     assert obj["phase"]["start_timestamp"].endswith("Z")
 
     assert obj["totals"]["requests"] == 7
@@ -64,3 +65,23 @@ def test_ndjson_schema(tmp_path):
     # SET had 1 success + 1 error.
     assert obj["metrics"]["SET"]["requests"] == 2
     assert obj["metrics"]["SET"]["errors"] == 1
+
+
+def test_pipeline_depth_is_recorded(tmp_path):
+    # connections alone cannot distinguish a pipelined run from a serial one, so
+    # the depth the phase actually ran at has to reach the output.
+    out = tmp_path / "metrics.ndjson"
+    writer = NdjsonWriter(str(out))
+    writer.set_metadata(commit_id="abc", driver_id="valkey-glide-python",
+                        primary_driver_version="2.5.2")
+    writer.write_phase_results(
+        phase_id="P",
+        status="COMPLETED",
+        connections=8,
+        collector=_collector_with_data(),
+        pipeline_depth=4,
+    )
+
+    phase = json.loads(out.read_text().splitlines()[0])["phase"]
+    assert phase["connections"] == 8
+    assert phase["pipeline_depth"] == 4

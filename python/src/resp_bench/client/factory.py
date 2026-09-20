@@ -58,8 +58,14 @@ class BenchmarkClientFactory:
 
     @classmethod
     async def create_and_connect(
-        cls, host: str, port: int, config: DriverConfig
+        cls, host: str, port: int, config: DriverConfig, pipeline_depth: int = 1
     ) -> "AsyncBenchmarkClient":
         client = cls.create(config.driver_id)
+        # Declared before connect() so a pooling driver can size its pool to the
+        # depth it will actually be driven at.
+        client.set_max_in_flight(pipeline_depth)
         await client.connect(host, port, config)
+        # Before any measurement: a pooling driver opens its extra sockets here
+        # rather than during the timed workload.
+        await client.prime()
         return client

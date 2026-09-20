@@ -57,7 +57,10 @@ def _print_info() -> None:
     for command in CommandFactory.supported_commands():
         print(f"  - {command}")
     print()
-    print("Concurrency: asyncio task-per-connection (one client per connection)")
+    print(
+        "Concurrency: asyncio, one client per connection, "
+        "pipeline_depth workers per connection"
+    )
 
 
 def _validate(options: argparse.Namespace) -> None:

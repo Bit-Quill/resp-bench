@@ -215,6 +215,33 @@ async def test_failure_before_workload_still_writes_row_with_timestamps(tmp_path
     assert engine.had_error is True
 
 
+async def test_cancellation_still_writes_a_row_and_flags_the_run(tmp_path):
+    # Ctrl-C under asyncio.run arrives as CancelledError. Catching only Exception
+    # let it unwind past write_phase_results, losing the row the guarantee exists
+    # for, and left had_error False so the CLI would exit 0 on an aborted run.
+    made = []
+
+    class Cancelling(RecordingClient):
+        async def connect(self, host, port, config):
+            await super().connect(host, port, config)
+            made.append(self)
+            # made[0] is the metadata probe, which runs before any phase starts;
+            # cancel on the first phase connection instead.
+            if len(made) > 1:
+                raise asyncio.CancelledError()
+
+    factory.BenchmarkClientFactory._FACTORIES["recording"] = lambda: Cancelling()
+    out, engine = _engine(tmp_path, _phase())
+
+    with pytest.raises(asyncio.CancelledError):
+        await engine.run()
+
+    row = json.loads(out.read_text().splitlines()[0])
+    assert row["phase"]["status"] == "INTERRUPTED"
+    assert row["phase"]["start_timestamp"] is not None
+    assert engine.had_error is True
+
+
 async def test_warmup_failure_still_writes_a_row_and_cancels_peers(tmp_path):
     made = []
 

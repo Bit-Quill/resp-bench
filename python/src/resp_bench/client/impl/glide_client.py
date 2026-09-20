@@ -3,6 +3,10 @@
 The async client is used deliberately (the sync ``glide_sync`` package is not
 used). One ``GlideClient`` is created per connection, honoring the
 ``client == connection`` invariant shared across engines.
+
+GLIDE multiplexes requests over a single socket, so a phase's ``pipeline_depth``
+is satisfied natively: concurrent awaits on one client put that many requests on
+the wire without opening additional connections.
 """
 
 from __future__ import annotations
@@ -79,4 +83,11 @@ class GlideBenchmarkClient(AsyncBenchmarkClient):
     def driver_details(self) -> dict:
         # GLIDE always negotiates RESP3 and parses in Rust, so neither is
         # environment-dependent; recorded for symmetry with the peer drivers.
-        return {"resp_protocol": 3, "response_parser": "glide-rust", "retries": 0}
+        return {
+            "resp_protocol": 3,
+            "response_parser": "glide-rust",
+            "retries": 0,
+            # GLIDE multiplexes, so pipeline_depth > 1 puts that many requests on
+            # the wire over the one socket -- no extra connections.
+            "pipelining": "multiplexed (1 socket per client)",
+        }

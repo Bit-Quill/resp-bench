@@ -335,7 +335,11 @@ python-info: python-build
 	python -m resp_bench --info
 
 python-clean:
-	cd python && rm -rf .venv .pytest_cache __pycache__ dist build *.egg-info src/*.egg-info
+	# Build artifacts only. Deliberately does NOT remove python/.venv: no target
+	# creates it, so it is the developer's own interpreter -- deleting it from
+	# inside itself breaks python-build/python-run until it is recreated by hand.
+	cd python && rm -rf .pytest_cache dist build *.egg-info src/*.egg-info
+	find python/src python/tests -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # ============================================================================
 # Ruby Engine

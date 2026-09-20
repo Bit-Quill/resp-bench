@@ -12,7 +12,10 @@ connection pool, the ``spring-data-*`` drivers a shared template, and
 declined upstream (ikolomi/resp-bench#11) in favour of keeping the
 one-client-per-connection baseline, which is why this engine does the same.
 
-Commands are coroutines: a worker awaits one at a time (pipeline depth 1).
+Commands are coroutines. At ``pipeline_depth = 1`` a connection has one command
+in flight at a time; above that the engine keeps ``pipeline_depth`` of them in
+flight on the same client, so an implementation must tolerate concurrent calls
+(see :meth:`AsyncBenchmarkClient.set_max_in_flight`).
 """
 
 from __future__ import annotations
@@ -28,6 +31,42 @@ T = TypeVar("T")
 
 
 class AsyncBenchmarkClient(ABC):
+    # How many commands the engine will keep in flight on this client, i.e. the
+    # phase's pipeline_depth. Declared as a class attribute so it is readable
+    # even in subclasses that do not chain __init__.
+    _max_in_flight: int = 1
+
+    def set_max_in_flight(self, depth: int) -> None:
+        """Declare the pipeline depth this client will be driven at.
+
+        Called by the factory before :meth:`connect`. Drivers that multiplex all
+        requests over a single socket (GLIDE) can ignore it. Drivers backed by a
+        connection pool (redis-py) **must** use it to bound the pool: otherwise
+        concurrent commands check out extra sockets and one "connection" quietly
+        becomes several, breaking the ``client == connection`` invariant.
+        """
+        self._max_in_flight = max(1, depth)
+
+    def sockets_per_client(self) -> int:
+        """How many server connections this client actually holds.
+
+        1 for a multiplexing driver at any depth. A pooling driver returns the
+        number its pool will grow to, so the metrics row can state the real
+        socket count instead of leaving it to be inferred from prose.
+        """
+        return 1
+
+    async def prime(self) -> None:
+        """Open everything ``_max_in_flight`` implies, before measurement starts.
+
+        Called by the factory right after :meth:`connect`. A pooling driver
+        creates a pooled socket only when a command needs one, so without this
+        the second and later sockets would be opened *inside* the measured window
+        and their TCP connect and handshake charged to the first requests. This
+        must not depend on ``warmup_requests``, which a workload may set to 0.
+        """
+        return None
+
     @abstractmethod
     async def connect(self, host: str, port: int, config: DriverConfig) -> None:
         """Establish the connection to the server."""

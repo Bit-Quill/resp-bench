@@ -52,12 +52,15 @@ class ConfigLoader:
 
     @staticmethod
     def _parse_phase(data: Dict[str, Any]) -> PhaseConfig:
-        phase = ConfigLoader._build_phase(data)
-        # Validate at load time so a bad config fails loudly before any
-        # connection is opened, rather than running zero requests or crashing a
-        # worker mid-phase.
-        phase_id = phase.id or "<unnamed>"
+        # _build_phase itself can raise (a command entry missing "command"), so it
+        # is inside the try too -- otherwise that error escapes without naming the
+        # phase it came from.
+        phase_id = data.get("id") or "<unnamed>"
         try:
+            # Validate at load time so a bad config fails loudly before any
+            # connection is opened, rather than running zero requests or crashing
+            # a worker mid-phase.
+            phase = ConfigLoader._build_phase(data)
             phase.completion.validate()
             phase.keyspace.validate()
             if phase.connections is None or phase.connections < 1:

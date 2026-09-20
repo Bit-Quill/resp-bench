@@ -109,3 +109,14 @@ def test_zero_total_weight_rejected():
 def test_error_names_the_phase():
     with pytest.raises(ValueError, match="invalid phase 'P'"):
         ConfigLoader.parse_workload_config(_workload({"type": "nope"}))
+
+
+@pytest.mark.parametrize("entry", [{"cmd": "get"}, {"command": None}, {"command": ""}])
+def test_missing_command_name_is_reported_usefully(entry):
+    # A `cmd:` typo used to exit with "'NoneType' object has no attribute
+    # 'lower'" -- naming neither the field nor the phase, because command parsing
+    # ran outside the block that adds phase context.
+    with pytest.raises(ValueError, match="invalid phase 'P': commands\\[\\].command is required"):
+        ConfigLoader.parse_workload_config(
+            _workload({"type": "requests", "requests": 10}, commands=[entry])
+        )

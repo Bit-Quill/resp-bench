@@ -1,27 +1,42 @@
 """Async benchmark engine.
 
 Concurrency model: a single asyncio event loop with **one client per
-connection** and **one worker coroutine per connection**, run concurrently.
-Each worker awaits one command at a time -- i.e. ``pipeline_depth`` is
-effectively 1, the same "one in-flight request per connection" shape the Java
-engine's virtual-thread workers produce.
+connection** and ``pipeline_depth`` worker coroutines per connection, all run
+concurrently. Each worker awaits one command at a time, so a connection has up
+to ``pipeline_depth`` requests in flight. At the default depth of 1 this is the
+same "one in-flight request per connection" shape the Java engine's
+virtual-thread workers produce.
+
+A connection's key generator and command selector are owned by the connection,
+not by the individual worker, so raising ``pipeline_depth`` changes how many
+requests are outstanding but not which keys a connection issues. This matches
+the C# engine, where one worker owns the generator for all of its pipeline
+slots.
 
 A request-based phase target is a single budget shared across all workers, which
 they claim from one request at a time -- matching the Java reference's shared
 ``AtomicLong`` rather than pre-splitting the target per worker.
 
-Known limits of this model, both deliberate:
+What ``pipeline_depth > 1`` costs physically depends on the driver, and the two
+supported drivers differ. GLIDE multiplexes, so the extra requests ride the one
+socket. redis-py serves each concurrent command from its connection pool, so a
+client uses up to ``pipeline_depth`` sockets -- bounded there by
+``set_max_in_flight``, and recorded in the metrics metadata as ``pipelining`` so
+a run says which mechanism produced it. There is no way to give redis-py real
+depth on a single socket: ``single_connection_client`` serialises behind a lock,
+and ``pipeline()`` batches N commands into one round trip with one shared
+latency, which measures something else entirely.
+
+Known limit of this model, deliberate:
 
 * **Single event loop.** Above roughly ``HIGH_CONNECTION_WARN_THRESHOLD``
-  connections the loop itself, not the driver, becomes the bottleneck, and the
-  loop's queuing delay is attributed to the driver in the reported latency. The
-  Java engine faced the same ceiling with a single command-issuing thread (see
+  concurrent in-flight requests (``connections x pipeline_depth``) the loop
+  itself, not the driver, becomes the bottleneck, and the loop's queuing delay
+  is attributed to the driver in the reported latency. The Java engine faced the
+  same ceiling with a single command-issuing thread (see
   ``docs/ARCHITECTURE.md``) and solved it with multiple issuer threads; this
   engine has no equivalent yet, so it warns above the threshold. Do not compare
-  high-connection-count Python results against other engines without accounting
-  for this.
-* **``pipeline_depth > 1``** (multiple in-flight requests per connection) is not
-  implemented; a phase requesting it runs at depth 1 with a warning.
+  results above it against other engines without accounting for this.
 """
 
 from __future__ import annotations
@@ -46,8 +61,9 @@ from .rate_limiter import RateLimiter
 
 logger = logging.getLogger("resp_bench")
 
-# Above this many connections the single event loop, not the driver, tends to set
-# the throughput ceiling and its queuing delay shows up as driver latency.
+# Above this many concurrent in-flight requests (connections x pipeline_depth)
+# the single event loop, not the driver, tends to set the throughput ceiling and
+# its queuing delay shows up as driver latency.
 HIGH_CONNECTION_WARN_THRESHOLD = 128
 
 # A worker yields at least this often even when every request completes without
@@ -113,7 +129,10 @@ class BenchmarkEngine:
             self._driver_config.driver_id,
             self._driver_config.mode,
         )
-        logger.info("Concurrency: asyncio task-per-connection (one client per connection)")
+        logger.info(
+            "Concurrency: asyncio, one client per connection, "
+            "pipeline_depth workers per connection"
+        )
         logger.info("Server: %s:%s", self._host, self._port)
 
         await self._setup_metadata()
@@ -157,22 +176,28 @@ class BenchmarkEngine:
     async def _execute_phase(self, phase: PhaseConfig) -> None:
         logger.info("=== Starting phase: %s (%s) ===", phase.id, phase.description)
 
-        if phase.effective_pipeline_depth() > 1:
-            logger.warning(
-                "pipeline_depth=%d requested for phase '%s', but the Python engine "
-                "does not yet implement pipelining; running at depth 1. Results are "
-                "not comparable to pipelined runs of other engines.",
-                phase.pipeline_depth,
-                phase.id,
+        depth = phase.effective_pipeline_depth()
+        in_flight = phase.connections * depth
+        if depth > 1:
+            logger.info(
+                "pipeline_depth=%d: up to %d requests in flight per connection "
+                "(%d total). What that costs physically is driver-specific and is "
+                "recorded as 'pipelining' in the metrics metadata.",
+                depth,
+                depth,
+                in_flight,
             )
 
-        if phase.connections > HIGH_CONNECTION_WARN_THRESHOLD:
+        if in_flight > HIGH_CONNECTION_WARN_THRESHOLD:
             logger.warning(
-                "connections=%d exceeds %d: the single event loop is likely the "
+                "connections=%d x pipeline_depth=%d = %d concurrent in-flight "
+                "requests exceeds %d: the single event loop is likely the "
                 "bottleneck rather than the driver, and loop queuing delay is "
                 "reported as driver latency. Treat these results with care and do "
                 "not compare them directly against other engines.",
                 phase.connections,
+                depth,
+                in_flight,
                 HIGH_CONNECTION_WARN_THRESHOLD,
             )
 
@@ -194,11 +219,14 @@ class BenchmarkEngine:
             # connection setup or warmup.
             collector.start()
             status = await self._run_workload(phase, clients, commands, collector)
-        except Exception as exc:  # noqa: BLE001 - recorded below, then re-raised
-            # Failures used to escape before anything was written, so the phase
-            # produced no row at all. Always emit a row so it stays visible.
+        except BaseException as exc:  # noqa: BLE001 - recorded below, then re-raised
+            # BaseException, not Exception: under asyncio.run a Ctrl-C arrives as
+            # CancelledError/KeyboardInterrupt, which would otherwise unwind past
+            # write_phase_results and lose the row this block exists to guarantee.
             failure = exc
-            logger.error("Phase %s failed: %s", phase.id, exc)
+            interrupted = isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError))
+            status = "INTERRUPTED" if interrupted else "ERROR"
+            logger.error("Phase %s failed (%s): %s", phase.id, status, exc)
         finally:
             # A phase that failed before the workload started still needs real
             # timestamps: nulls would violate the documented schema and the graph
@@ -208,7 +236,10 @@ class BenchmarkEngine:
             collector.stop()
             await self._close_clients(clients)
 
-        if status == "ERROR":
+        # Anything short of COMPLETED must reach the CLI's exit code: an
+        # interrupted phase is not a good run either, and the matrix runner would
+        # otherwise score the cell as ok.
+        if status != "COMPLETED":
             self._had_error = True
 
         self._writer.write_phase_results(
@@ -216,6 +247,8 @@ class BenchmarkEngine:
             status=status,
             connections=phase.connections,
             collector=collector,
+            pipeline_depth=depth,
+            sockets_per_client=clients[0].sockets_per_client() if clients else 1,
         )
         self._log_phase_summary(phase, collector, status)
 
@@ -225,19 +258,25 @@ class BenchmarkEngine:
     async def _create_clients(self, phase: PhaseConfig) -> List[AsyncBenchmarkClient]:
         logger.info("Creating %d connections...", phase.connections)
         cps_limiter = RateLimiter.create(phase.cps_limit) if phase.has_cps_limit() else None
+        depth = phase.effective_pipeline_depth()
 
         clients: List[AsyncBenchmarkClient] = []
         for _ in range(phase.connections):
             if cps_limiter is not None:
                 await cps_limiter.acquire()
             client = await BenchmarkClientFactory.create_and_connect(
-                self._host, self._port, self._driver_config
+                self._host, self._port, self._driver_config, pipeline_depth=depth
             )
             clients.append(client)
         logger.info("All %d connections established", len(clients))
         return clients
 
     async def _warmup(self, clients: List[AsyncBenchmarkClient], warmup_requests: int) -> None:
+        # Exactly `warmup_requests` PINGs per client, matching the shared schema's
+        # "number of warmup PING requests per client" and what Java/Ruby/C# issue.
+        # Deliberately NOT multiplied by pipeline_depth: opening a pooling driver's
+        # extra sockets is the driver's job (see AsyncBenchmarkClient.prime), and
+        # scaling warmup with depth would make a depth sweep also sweep warmup work.
         logger.info("Warmup: %d PINGs per client...", warmup_requests)
 
         async def warm(client: AsyncBenchmarkClient) -> None:
@@ -261,7 +300,7 @@ class BenchmarkEngine:
         collector: MetricsCollector,
     ) -> str:
         completion = phase.completion
-        num_workers = len(clients)
+        depth = phase.effective_pipeline_depth()
         seed_base = phase.keyspace.seed_value()
         shared_counter = Counter()  # shared across workers for sequential_int
 
@@ -285,11 +324,11 @@ class BenchmarkEngine:
         )
         request_budget = Counter()
 
-        async def worker(idx: int, client: AsyncBenchmarkClient) -> None:
-            key_gen = KeyGenerator.create_with_seed(
-                phase.keyspace, seed_base + idx, sequential_counter=shared_counter
-            )
-            selector = CommandSelector(commands)
+        async def worker(
+            client: AsyncBenchmarkClient,
+            key_gen: KeyGenerator,
+            selector: CommandSelector,
+        ) -> None:
             since_yield = 0
             consecutive_failures = 0
             while True:
@@ -347,11 +386,30 @@ class BenchmarkEngine:
                     else:
                         await asyncio.sleep(0)
 
-        logger.info("Starting %d worker coroutines...", num_workers)
+        # One key generator and one command selector per CONNECTION, shared by
+        # that connection's pipeline slots. Sharing is what keeps the key stream a
+        # property of the connection: at any depth, connection i draws from the
+        # same RNG stream seeded seed_base + i, so raising pipeline_depth changes
+        # concurrency without changing which keys are touched.
+        workers = []
+        for idx, client in enumerate(clients):
+            key_gen = KeyGenerator.create_with_seed(
+                phase.keyspace, seed_base + idx, sequential_counter=shared_counter
+            )
+            selector = CommandSelector(commands)
+            for _ in range(depth):
+                workers.append(worker(client, key_gen, selector))
+
+        logger.info(
+            "Starting %d worker coroutines (%d connections x pipeline_depth %d)...",
+            len(workers),
+            len(clients),
+            depth,
+        )
         try:
             # Cancel-and-drain on first failure: a worker that dies must not
             # leave its peers running against clients we are about to close.
-            await _gather_all_or_cancel(worker(i, c) for i, c in enumerate(clients))
+            await _gather_all_or_cancel(workers)
         except KeyboardInterrupt:  # pragma: no cover
             logger.warning("Workload interrupted")
             return "INTERRUPTED"
@@ -387,11 +445,14 @@ class BenchmarkEngine:
         rps = round(total / duration_s) if duration_s > 0 else 0
         logger.info("=== Phase %s completed: %s ===", phase.id, status)
         logger.info(
-            "  Duration: %.1fs | Requests: %d | Errors: %d | RPS: %d",
+            "  Duration: %.1fs | Requests: %d | Errors: %d | RPS: %d | "
+            "connections=%d x depth=%d",
             duration_s,
             total,
             errors,
             rps,
+            phase.connections,
+            phase.effective_pipeline_depth(),
         )
         for cmd_name, cmd_metrics in collector.command_metrics.items():
             if cmd_metrics.count() == 0:
