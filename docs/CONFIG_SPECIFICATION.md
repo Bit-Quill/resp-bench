@@ -453,11 +453,14 @@ All language engines produce NDJSON (one JSON object per line):
 | Field | Description |
 |-------|-------------|
 | `phase.id` | Phase identifier from config |
-| `phase.status` | `COMPLETED` or `ERROR` |
+| `phase.status` | `COMPLETED`, `ERROR`, or `INTERRUPTED` |
 | `phase.start_timestamp` | ISO-8601 UTC timestamp |
 | `phase.finish_timestamp` | ISO-8601 UTC timestamp |
 | `phase.duration_ms` | Phase duration in milliseconds |
 | `phase.connections` | Number of connections used |
+| `phase.pipeline_depth` | Optional. In-flight requests per connection. Absent means 1 |
+| `phase.sockets_per_client` | Optional. Server connections each client holds — 1 for a multiplexing driver, up to `pipeline_depth` for a pooling one |
+| `phase.total_sockets` | Optional. `connections × sockets_per_client` |
 | `totals.requests` | Total requests across all commands |
 | `totals.errors` | Total errors across all commands |
 | `metrics.<CMD>.requests` | Requests for this command |
@@ -466,6 +469,15 @@ All language engines produce NDJSON (one JSON object per line):
 | `metrics.<CMD>.latency.count` | Successful latency samples |
 | `metrics.<CMD>.latency.summary` | Percentile statistics |
 | `metrics.<CMD>.latency.hdr` | HdrHistogram for full analysis |
+
+An engine may also emit a `metadata` object (`commit_id`, `timestamp`,
+`driver_id`, `primary_driver_version`, `secondary_driver_id`,
+`secondary_driver_version`). Driver settings that change what is being measured
+belong there too, as optional keys: `resp_protocol`, `response_parser`,
+`retries`, and `pipelining` (how the driver satisfies `pipeline_depth`, e.g.
+`multiplexed (1 socket per client)` vs `connection-pool (up to pipeline_depth
+sockets per client)`). All optional fields above are additive — consumers read by
+key, so an engine that omits them stays compatible.
 
 ### HdrHistogram Payload
 

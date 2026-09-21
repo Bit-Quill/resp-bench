@@ -31,7 +31,7 @@ WORK_DIR=$(shell pwd)/work
 	server-sentinel-start server-sentinel-stop \
 	server-start server-stop \
 	java-build java-test java-run java-clean \
-	python-build python-test python-run python-clean \
+	python-build python-test python-run python-clean python-info \
 	ruby-build ruby-test ruby-run ruby-clean ruby-info \
 	csharp-build csharp-test csharp-run csharp-clean csharp-info \
 	node-build node-deps node-test node-unit-test node-integration-test \
@@ -58,10 +58,11 @@ help:
 	@echo "  make java-run               Run Java benchmark (requires DRIVER and WORKLOAD)"
 	@echo "  make java-clean             Clean Java build artifacts"
 	@echo ""
-	@echo "Python Engine (placeholder):"
-	@echo "  make python-build           Build Python benchmark engine"
+	@echo "Python Engine:"
+	@echo "  make python-build           Install Python benchmark engine (python -m pip install -e .)"
 	@echo "  make python-test            Run Python tests"
-	@echo "  make python-run             Run Python benchmark"
+	@echo "  make python-run             Run Python benchmark (requires DRIVER and WORKLOAD)"
+	@echo "  make python-clean           Clean Python build artifacts"
 	@echo ""
 	@echo "Ruby Engine:"
 	@echo "  make ruby-build             Install Ruby dependencies"
@@ -314,24 +315,42 @@ java-info: java-build
 	java -jar $(JAVA_JAR) --info
 
 # ============================================================================
-# Python Engine (Placeholder)
+# Python Engine
 # ============================================================================
 
+# Extra flags for the editable install. Empty by default, which is what a
+# virtualenv needs -- pip rejects --user inside one. A provisioned host installs
+# against a system interpreter it cannot write to, so infra/provision.sh exports
+# PIP_FLAGS=--user into .resp-bench-env for the sweep to pick up.
+PIP_FLAGS?=
+
+# `python -m pip`, not bare `pip`: the latter is a separate console script that
+# need not exist even where pip is installed (AL2023's python3.11-pip ships only
+# pip3.11), and when it does exist it can belong to a different interpreter than
+# the `python` that python-run uses. The module form is always the same
+# interpreter as `python`.
 python-build:
-	@echo "Python engine not yet implemented"
-	@echo "Placeholder for: cd python && pip install -e ."
+	cd python && python -m pip install $(PIP_FLAGS) -e .
 
 python-test:
-	@echo "Python engine not yet implemented"
-	@echo "Placeholder for: cd python && pytest"
+	cd python && python -m pytest
 
-python-run:
-	@echo "Python engine not yet implemented"
-	@echo "Placeholder for: python -m resp_bench --server $(SERVER) --driver $(DRIVER) --workload $(WORKLOAD)"
+python-run: python-build
+	python -m resp_bench \
+		--server $(SERVER) \
+		--driver $(DRIVER) \
+		--workload $(WORKLOAD) \
+		--metrics $(METRICS_OUTPUT)
+
+python-info: python-build
+	python -m resp_bench --info
 
 python-clean:
-	@echo "Python engine not yet implemented"
-	@echo "Placeholder for: cd python && rm -rf __pycache__ *.egg-info dist build"
+	# Build artifacts only. Deliberately does NOT remove python/.venv: no target
+	# creates it, so it is the developer's own interpreter -- deleting it from
+	# inside itself breaks python-build/python-run until it is recreated by hand.
+	cd python && rm -rf .pytest_cache dist build *.egg-info src/*.egg-info
+	find python/src python/tests -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # ============================================================================
 # Ruby Engine

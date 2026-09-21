@@ -75,8 +75,9 @@ DRIVER_LANGUAGE_MAP = {
     "valkey-glide-node": "node",
     "ioredis": "node",
     "iovalkey": "node",
-    # Python drivers (future)
+    # Python drivers
     "redis-py": "python",
+    "valkey-glide-python": "python",
     "aioredis": "python",
 }
 
@@ -146,9 +147,15 @@ def load_results(
     language_filter: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Load NDJSON result files and extract specified phase data.
-    
+
     If language_filter is provided, only results from drivers matching that
     language are included.
+
+    Rows whose phase did not complete are skipped. A failed phase still emits a
+    row (so the failure stays visible in the raw output), but it carries
+    requests=0 and duration_ms=0, which aggregate_results would otherwise average
+    in as a 0-RPS data point and silently drag that driver's reported throughput
+    down.
     """
     results = []
     
@@ -168,7 +175,17 @@ def load_results(
                     # Filter by phase
                     if data.get("phase", {}).get("id") != phase_filter:
                         continue
-                    
+
+                    # Skip phases that did not complete; see the docstring.
+                    status = data.get("phase", {}).get("status", "COMPLETED")
+                    if status != "COMPLETED":
+                        print(
+                            f"Warning: skipping {status} phase in {path.name} "
+                            f"(driver={data.get('metadata', {}).get('driver_id', '?')})",
+                            file=sys.stderr,
+                        )
+                        continue
+
                     # Filter by language if specified
                     if language_filter:
                         driver_id = data.get("metadata", {}).get("driver_id", "")

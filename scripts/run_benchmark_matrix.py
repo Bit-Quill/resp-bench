@@ -128,6 +128,9 @@ DRIVER_ENGINE_MAP = {
     "valkey-glide-node": "node",
     "ioredis": "node",
     "iovalkey": "node",
+    # Python drivers
+    "redis-py": "python",
+    "valkey-glide-python": "python",
     # Recording (default to java)
     "recording": "java",
 }
