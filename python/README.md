@@ -1,67 +1,106 @@
 # resp-bench Python Engine
 
-🚧 **This engine is planned but not yet implemented.**
+Python implementation of the resp-bench benchmark suite, at parity with the
+Java (reference), Ruby, and C# engines.
 
-## Overview
+## Supported Drivers
 
-Python implementation of the resp-bench benchmark suite.
+| Driver | `driver_id` | Package | Notes |
+|--------|-------------|---------|-------|
+| Valkey GLIDE | `valkey-glide-python` | `valkey-glide` (`import glide`) | Async client |
+| redis-py | `redis-py` | `redis` (`redis.asyncio`) | Async client, RESP3, retries disabled |
+| Recording | `recording` | — | In-memory; for server-free tests |
 
-## Planned Drivers
+Peer drivers are kept deliberately few so each one's configuration can be held
+equivalent (same RESP version, same retry policy, same command timeout). A
+`valkey-py` driver is a planned follow-up.
 
-| Driver | Package | Status |
-|--------|---------|--------|
-| redis-py | `redis` | 📋 Planned |
-| redis-py-async | `redis[hiredis]` | 📋 Planned |
-| valkey-glide | `valkey-glide` | 📋 Planned |
+> The GLIDE `driver_id` is `valkey-glide-python` (not the bare `valkey-glide`,
+> which is the Java driver) — matching the `valkey-glide-ruby` /
+> `valkey-glide-csharp` convention.
 
-## Planned Features
+## Execution model
 
-- Full parity with Java engine
-- Async/await based execution using `asyncio`
-- HdrHistogram for latency collection
-- NDJSON metrics output
+The engine is asyncio-based. For a phase with `connections = N` and
+`pipeline_depth = D`, it creates **N client instances** (one client per
+connection — the `client == connection` invariant shared by every engine) and
+runs **N × D worker coroutines** concurrently on a single event loop. Each worker
+awaits one command at a time, so a connection has up to `D` requests in flight.
+At the default `D = 1` this is the async analogue of the Java/Ruby "one
+in-flight request per connection" model.
 
-## Contributing
+Each connection owns one key generator and one command selector, shared by its
+`D` slots, so raising `pipeline_depth` changes how many requests are outstanding
+but not which keys a connection touches. That mirrors the C# engine, where one
+worker owns the generator for all of its pipeline slots.
 
-We welcome contributions to implement the Python engine! Please see:
-- [Architecture Documentation](../docs/ARCHITECTURE.md)
-- [Adding a Language Guide](../docs/ADDING_LANGUAGE.md)
+### What `pipeline_depth > 1` costs, per driver
 
-## Directory Structure (Planned)
+The concurrency is the same; the physical cost is not, so each driver records its
+mechanism as `pipelining` in the metrics metadata:
 
-```
-python/
-├── README.md
-├── pyproject.toml
-├── requirements.txt
-└── src/
-    └── resp_bench/
-        ├── __init__.py
-        ├── __main__.py
-        ├── client/
-        │   ├── __init__.py
-        │   ├── interface.py
-        │   └── impl/
-        │       └── redis_py.py
-        ├── command/
-        ├── config/
-        ├── engine/
-        └── metrics/
-```
+| Driver | Mechanism | Sockets per client |
+|---|---|---|
+| `valkey-glide-python` | multiplexed over one socket | 1 |
+| `redis-py` | one pooled connection per in-flight command | up to `pipeline_depth` |
 
-## Usage (Future)
+redis-py cannot give real depth on a single socket: `single_connection_client`
+serialises behind a lock, and `pipeline()` batches N commands into one round trip
+with one shared latency — a different measurement. Its pool is therefore capped
+at `pipeline_depth`, so a connection can never quietly become more sockets than
+the phase asked for. **Compare `redis-py` depth>1 numbers against GLIDE depth>1
+with that difference in mind; they are not the same experiment.**
+
+This one-client-per-connection mapping is this engine's baseline; it is not a
+property of the whole suite (among other engines' drivers, `lettuce` and
+`redis-rb` are 1:1, but `jedis`/`redisson` pool, `spring-data-*` share a
+template, and `stackexchange-redis` multiplexes). Sharing a single multiplexing client across
+workers was proposed and declined upstream
+([ikolomi/resp-bench#11](https://github.com/ikolomi/resp-bench/issues/11)) in
+favour of keeping this baseline.
+
+### Known limits
+
+- **Single event loop.** Above ~128 concurrent in-flight requests
+  (`connections × pipeline_depth`) the event loop, not the driver, becomes the
+  bottleneck, and loop queuing delay is attributed to the driver in the reported
+  latency. The engine warns past that threshold. The Java engine hit the same
+  ceiling with one command-issuing thread and added multiple issuer threads; this
+  engine has no equivalent yet, so results above the threshold are not directly
+  comparable to other engines.
+
+## Installation
+
+Requires Python 3.10+ (tested on 3.10, 3.11 and 3.12) and a **C compiler**:
+`hdrhistogram` publishes no wheels, so pip builds it from source. GitHub's
+`ubuntu-latest` and a normal macOS dev box already have one; a slim container
+does not (`pip install` fails with `command 'gcc' failed: No such file or
+directory` — `apt-get install gcc` fixes it).
 
 ```bash
-# Install
 pip install -e .
+# with test tooling:
+pip install -e ".[dev]"
+```
 
-# Run benchmark
+## Usage
+
+```bash
 python -m resp_bench \
   --server localhost:6379 \
-  --driver ../configs/drivers/example-redis-py-standalone.json \
+  --driver ../configs/drivers/default/redis-py.json \
   --workload ../configs/workloads/example-workload.json \
   --metrics output.ndjson
 
-# Show supported drivers
+# Show supported drivers and commands
 python -m resp_bench --info
 ```
+
+## Testing
+
+```bash
+pytest                      # unit + recording-driver integration (no server needed)
+```
+
+See [../docs/ADDING_LANGUAGE.md](../docs/ADDING_LANGUAGE.md) and
+[../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for the shared contracts.
