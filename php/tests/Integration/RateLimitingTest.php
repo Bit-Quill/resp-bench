@@ -132,6 +132,38 @@ final class RateLimitingTest extends TestCase
         );
     }
 
+    public function testRpsLimitBelowConnectionCountDoesNotOvershoot(): void
+    {
+        // Regression: the old max(1, intdiv(rps, N)) floor turned a rounded-to-zero
+        // share into 1 rps per worker, multiplying back up above the target
+        // (rps=4, connections=8 → 8 rps aggregate). The remainder-distribution
+        // split gives 4 workers 1 rps and 4 workers 0, summing to exactly 4.
+        if (!function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl not available');
+        }
+
+        $targetRps = 4;
+        $connections = 8;
+        $targetRequests = 20;
+
+        $metricsPath = null;
+        $workload = $this->parseWorkload($this->rpsWorkload($targetRps, $targetRequests, $connections));
+        $phase = $this->runEngineProcess($workload, $metricsPath)[0];
+
+        self::assertSame($targetRequests, $phase['totals']['requests']);
+
+        $durationMs = $phase['phase']['duration_ms'];
+        $actualRate = $phase['totals']['requests'] / ($durationMs / 1000.0);
+
+        // Aggregate must not exceed the target by more than tolerance. The old
+        // floored behavior would double it to ~8 rps.
+        self::assertLessThan(
+            $targetRps * 1.5,
+            $actualRate,
+            "Aggregate rate {$actualRate} overshoots target {$targetRps} (rps < connections floor bug)",
+        );
+    }
+
     private function rpsWorkload(int $rpsLimit, int $requests, int $connections = 1): string
     {
         return <<<JSON

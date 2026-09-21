@@ -127,11 +127,19 @@ final class Collector
 
     /**
      * Merge another collector's per-command metrics and totals into this one.
+     * The phase window widens to cover both collectors: min(start), max(stop).
      */
     public function mergeFrom(self $other): void
     {
         $this->totalRequests += $other->totalRequests;
         $this->totalErrors += $other->totalErrors;
+
+        if ($other->startTime !== null && ($this->startTime === null || $other->startTime < $this->startTime)) {
+            $this->startTime = $other->startTime;
+        }
+        if ($other->endTime !== null && ($this->endTime === null || $other->endTime > $this->endTime)) {
+            $this->endTime = $other->endTime;
+        }
 
         foreach ($other->commandMetrics as $name => $metrics) {
             $merged = $this->commandMetrics[$name] ??= new CommandMetrics($name);

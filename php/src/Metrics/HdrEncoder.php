@@ -66,9 +66,12 @@ final class HdrEncoder
 
         $countsBytes = self::encodeCounts($histogram);
 
-        // payload_len = everything after the payload_len field itself:
-        // normalizing(4) + sigfigs(4) + lowest(8) + highest(8) + ratio(8) + counts
-        $payloadLen = 4 + 4 + 8 + 8 + 8 + strlen($countsBytes);
+        // Java's V2 payload_length is the counts-array length ONLY — it is written
+        // as `buffer.position() - payloadStartPosition`, measured after the 40-byte
+        // header (see AbstractHistogram.encodeIntoByteBuffer). It must NOT include
+        // the 32 bytes of header fields that follow the length field, or Java's
+        // decoder throws "The buffer does not contain the indicated payload amount".
+        $payloadLen = strlen($countsBytes);
 
         $header = pack('N4', self::V2_ENCODING_COOKIE, $payloadLen, $normalizingOffset, $sigFigs);
         $int64Fields = self::packInt64BE($lowest)

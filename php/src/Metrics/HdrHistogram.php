@@ -125,13 +125,23 @@ final class HdrHistogram
             return 0;
         }
 
-        // If only zero-valued samples were recorded, min is 0.
-        return $this->minNonZeroValue === PHP_INT_MAX ? 0 : $this->minNonZeroValue;
+        // Match Java's getMinValue(): the bucket's equivalent lower bound, and 0
+        // when the zero bucket is non-empty. valueAtPercentile(0) yields the
+        // lowest populated bucket's value (0 if index 0 is populated), which is
+        // stable whether the histogram was recorded directly or built via merge()
+        // (merge re-records at bucket floors).
+        return $this->valueAtPercentile(0.0);
     }
 
     public function max(): int
     {
-        return $this->maxValue;
+        if ($this->totalCount === 0) {
+            return 0;
+        }
+
+        // Match Java's getMaxValue(): the highest-equivalent value of the top
+        // populated bucket (a ceiling), not the raw recorded sample.
+        return $this->valueAtPercentile(100.0);
     }
 
     public function valueAtPercentile(float $percentile): int

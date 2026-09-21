@@ -51,10 +51,18 @@ final class JavaRandom
         }
 
         // General case - rejection sampling to avoid modulo bias.
+        //
+        // Java relies on signed 32-bit overflow: it rejects when
+        //   bits - val + (bound - 1) < 0
+        // i.e. when the int32 sum overflows past Integer.MAX_VALUE. PHP ints are
+        // 64-bit, so that sum is never negative and the branch would never fire —
+        // leaving the two LCG streams permanently out of step. Emulate the
+        // wraparound by accepting only while the sum stays within int32 range
+        // (matches the Node port's toInt32 approach).
         while (true) {
             $bits = $this->nextBits(31);
             $val = $bits % $bound;
-            if ($bits - $val + ($bound - 1) >= 0) {
+            if ($bits - $val + ($bound - 1) <= 2147483647) {
                 return $val;
             }
         }

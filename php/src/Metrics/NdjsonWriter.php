@@ -91,7 +91,9 @@ final class NdjsonWriter
             'errors' => $collector->totalErrors(),
         ];
 
-        $result['metrics'] = $this->buildCommandMetrics($collector);
+        // Cast to object so an empty metrics map serializes as {} not [] — the
+        // graph consumers call .items() on it and would crash on a JSON array.
+        $result['metrics'] = (object) $this->buildCommandMetrics($collector);
 
         return $result;
     }

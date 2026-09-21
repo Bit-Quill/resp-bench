@@ -126,4 +126,47 @@ final class KeyGeneratorTest extends TestCase
         // JavaRandom(0).nextInt(1000) == 360 (verified against Java canonical LCG).
         self::assertSame('bench:0000000360', $first);
     }
+
+    public function testSequentialWorkersPartitionKeyspaceWithoutDuplication(): void
+    {
+        // Regression: previously every forked worker restarted at 0, so N workers
+        // wrote only keys_count/N distinct keys. Now worker i strides i, i+N, ...
+        // and the union covers the full keyspace exactly once.
+        $config = new KeyspaceConfig(
+            keysCount: 20,
+            keySizeBytes: 8,
+            keyPrefix: 'k:',
+            generationAlg: 'sequential_int',
+        );
+
+        $workerCount = 4;
+        $perWorker = 5; // 4 * 5 = 20 = keys_count
+        $all = [];
+        for ($w = 0; $w < $workerCount; $w++) {
+            $gen = KeyGenerator::forWorker($config, $w, $workerCount);
+            for ($i = 0; $i < $perWorker; $i++) {
+                $all[] = $gen->nextKey();
+            }
+        }
+
+        self::assertCount(20, $all);
+        self::assertCount(20, array_unique($all), 'workers must not duplicate keys');
+    }
+
+    public function testSingleWorkerSequentialWalksFullKeyspace(): void
+    {
+        $config = new KeyspaceConfig(
+            keysCount: 5,
+            keySizeBytes: 8,
+            keyPrefix: 'k:',
+            generationAlg: 'sequential_int',
+        );
+        $gen = KeyGenerator::forWorker($config, 0, 1);
+
+        $keys = [];
+        for ($i = 0; $i < 5; $i++) {
+            $keys[] = $gen->nextKey();
+        }
+        self::assertCount(5, array_unique($keys));
+    }
 }

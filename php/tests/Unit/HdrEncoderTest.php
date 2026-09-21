@@ -60,12 +60,61 @@ final class HdrEncoderTest extends TestCase
         self::assertSame(0, $v2['norm']);
         self::assertSame(3, $v2['sig']);
 
+        // V2 payload_length must equal the counts-array length ONLY (the bytes
+        // after the 40-byte header), matching Java's
+        // buffer.position() - payloadStartPosition. Including the 32 header bytes
+        // makes org.hdrhistogram refuse to decode. This assertion guards that.
+        $countsLen = strlen($payload) - 40;
+        self::assertSame($countsLen, $v2['plen'], 'payload_length must be counts-only');
+
         /** @var array{lowest:int,highest:int,ratio:int} $fields */
         $fields = unpack('Jlowest/Jhighest/Jratio', substr($payload, 16, 24));
         self::assertSame(1, $fields['lowest']);
         self::assertSame(600_000_000, $fields['highest']);
         // IEEE754 bits for 1.0
         self::assertSame(4607182418800017408, $fields['ratio']);
+    }
+
+    public function testMaxReturnsBucketCeilingNotRawSample(): void
+    {
+        // Java's getMaxValue() returns the bucket's equivalent upper bound, not
+        // the raw recorded value. 12345 falls in a bucket whose ceiling is 12351.
+        $h = new HdrHistogram(1, 600_000_000, 3);
+        foreach ([100, 250, 12345] as $v) {
+            $h->record($v);
+        }
+        self::assertGreaterThanOrEqual(12345, $h->max());
+        self::assertNotSame(12345, $h->max(), 'max should be the bucket ceiling, not the raw sample');
+    }
+
+    public function testMinIsZeroWhenZeroBucketPopulated(): void
+    {
+        // Java returns 0 for min when the zero bucket is non-empty.
+        $h = new HdrHistogram(1, 600_000_000, 3);
+        $h->record(0);
+        $h->record(500);
+        self::assertSame(0, $h->min());
+    }
+
+    public function testMergedHistogramMaxMatchesDirectRecording(): void
+    {
+        // Process mode builds the parent histogram entirely from merged partials
+        // (re-recorded at bucket floors). max() must still report the ceiling,
+        // matching a directly-recorded histogram.
+        $direct = new HdrHistogram(1, 600_000_000, 3);
+        foreach ([100, 250, 12345] as $v) {
+            $direct->record($v);
+        }
+
+        $partial = new HdrHistogram(1, 600_000_000, 3);
+        foreach ([100, 250, 12345] as $v) {
+            $partial->record($v);
+        }
+        $merged = new HdrHistogram(1, 600_000_000, 3);
+        $merged->merge($partial);
+
+        self::assertSame($direct->max(), $merged->max());
+        self::assertSame($direct->valueAtPercentile(99), $merged->valueAtPercentile(99));
     }
 
     public function testBase64Encoding(): void

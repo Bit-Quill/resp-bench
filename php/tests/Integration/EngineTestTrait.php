@@ -37,6 +37,24 @@ trait EngineTestTrait
      */
     private function runEngine(WorkloadConfig $workload, ?string &$metricsPath = null): array
     {
+        return $this->runEngineWithMode($workload, 'inline', $metricsPath);
+    }
+
+    /**
+     * Run the engine with the recording driver in process (fork) mode.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function runEngineProcess(WorkloadConfig $workload, ?string &$metricsPath = null): array
+    {
+        return $this->runEngineWithMode($workload, 'process', $metricsPath);
+    }
+
+    /**
+     * @return list<array<string,mixed>>
+     */
+    private function runEngineWithMode(WorkloadConfig $workload, string $mode, ?string &$metricsPath = null): array
+    {
         $metricsPath = sys_get_temp_dir() . '/resp_bench_php_it_' . uniqid('', true) . '.ndjson';
 
         $engine = new Benchmark(
@@ -46,7 +64,7 @@ trait EngineTestTrait
             workloadConfig: $workload,
             metricsPath: $metricsPath,
             commitId: 'it-test',
-            concurrencyMode: 'inline',
+            concurrencyMode: $mode,
         );
         $engine->run();
 

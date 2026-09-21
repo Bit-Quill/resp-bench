@@ -35,9 +35,8 @@ final class Cli
             }
 
             $this->validateOptions();
-            $this->executeBenchmark();
 
-            return 0;
+            return $this->executeBenchmark();
         } catch (\Throwable $e) {
             fwrite(STDERR, 'Error: ' . $e->getMessage() . "\n");
             if (getenv('DEBUG')) {
@@ -122,7 +121,7 @@ final class Cli
         }
     }
 
-    private function executeBenchmark(): void
+    private function executeBenchmark(): int
     {
         $driverConfig = Loader::loadDriverConfig((string) $this->options['driver']);
         $workloadConfig = Loader::loadWorkloadConfig((string) $this->options['workload']);
@@ -139,7 +138,8 @@ final class Cli
                 : null,
         );
 
-        $engine->run();
+        // Non-zero when any phase reported a non-COMPLETED status.
+        return $engine->run();
     }
 
     private function printInfo(): void
