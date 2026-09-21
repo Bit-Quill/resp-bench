@@ -59,7 +59,7 @@ help:
 	@echo "  make java-clean             Clean Java build artifacts"
 	@echo ""
 	@echo "Python Engine:"
-	@echo "  make python-build           Install Python benchmark engine (pip install -e .)"
+	@echo "  make python-build           Install Python benchmark engine (python -m pip install -e .)"
 	@echo "  make python-test            Run Python tests"
 	@echo "  make python-run             Run Python benchmark (requires DRIVER and WORKLOAD)"
 	@echo "  make python-clean           Clean Python build artifacts"
@@ -318,8 +318,19 @@ java-info: java-build
 # Python Engine
 # ============================================================================
 
+# Extra flags for the editable install. Empty by default, which is what a
+# virtualenv needs -- pip rejects --user inside one. A provisioned host installs
+# against a system interpreter it cannot write to, so infra/provision.sh exports
+# PIP_FLAGS=--user into .resp-bench-env for the sweep to pick up.
+PIP_FLAGS?=
+
+# `python -m pip`, not bare `pip`: the latter is a separate console script that
+# need not exist even where pip is installed (AL2023's python3.11-pip ships only
+# pip3.11), and when it does exist it can belong to a different interpreter than
+# the `python` that python-run uses. The module form is always the same
+# interpreter as `python`.
 python-build:
-	cd python && pip install -e .
+	cd python && python -m pip install $(PIP_FLAGS) -e .
 
 python-test:
 	cd python && python -m pytest
