@@ -34,6 +34,7 @@ WORK_DIR=$(shell pwd)/work
 	python-build python-test python-run python-clean python-info \
 	ruby-build ruby-test ruby-run ruby-clean ruby-info \
 	csharp-build csharp-test csharp-run csharp-clean csharp-info \
+	php-build php-test php-integration-test php-test-live php-run php-clean php-info \
 	node-build node-deps node-test node-unit-test node-integration-test \
 	node-run node-clean node-info \
 	config-editor-build config-editor-dev
@@ -414,6 +415,68 @@ csharp-clean:
 
 csharp-info: csharp-build
 	dotnet run --project $(CSHARP_PROJECT) -c Release -- --info
+
+# ============================================================================
+# ============================================================================
+# PHP Engine
+# ============================================================================
+
+# Prefer composer's autoloader; the CLI falls back to a minimal PSR-4 loader,
+# so php-run/php-info work even before `composer install`.
+PHP?=php
+
+php-build:
+	cd php && if command -v composer >/dev/null 2>&1; then \
+		composer install --no-interaction --prefer-dist --optimize-autoloader; \
+	else \
+		echo "composer not found; using the bundled minimal autoloader (php/vendor/autoload.php)"; \
+	fi
+
+php-test:
+	cd php && if [ -f vendor/bin/phpunit ]; then \
+		vendor/bin/phpunit --testsuite unit; \
+	elif [ -f /tmp/phpunit.phar ]; then \
+		$(PHP) /tmp/phpunit.phar --testsuite unit; \
+	else \
+		echo "PHPUnit not installed. Run 'make php-build' (composer) or download phpunit.phar."; \
+		exit 1; \
+	fi
+
+php-integration-test:
+	cd php && if [ -f vendor/bin/phpunit ]; then \
+		vendor/bin/phpunit --testsuite integration; \
+	elif [ -f /tmp/phpunit.phar ]; then \
+		$(PHP) /tmp/phpunit.phar --testsuite integration; \
+	else \
+		echo "PHPUnit not installed. Run 'make php-build' (composer) or download phpunit.phar."; \
+		exit 1; \
+	fi
+
+# Live integration tests for the valkey-glide-php driver. Requires the
+# valkey_glide extension AND a reachable server (VALKEY_HOST/VALKEY_PORT,
+# default localhost:6379). Tests skip cleanly if either is missing.
+php-test-live:
+	cd php && if [ -f vendor/bin/phpunit ]; then \
+		vendor/bin/phpunit --testsuite integration --filter 'LiveClientTest|PhpRedisLiveTest'; \
+	elif [ -f /tmp/phpunit.phar ]; then \
+		$(PHP) /tmp/phpunit.phar --testsuite integration --filter 'LiveClientTest|PhpRedisLiveTest'; \
+	else \
+		echo "PHPUnit not installed. Run 'make php-build' (composer) or download phpunit.phar."; \
+		exit 1; \
+	fi
+
+php-run: php-build
+	$(PHP) php/bin/resp-bench \
+		--server $(SERVER) \
+		--driver $(DRIVER) \
+		--workload $(WORKLOAD) \
+		--metrics $(METRICS_OUTPUT)
+
+php-clean:
+	cd php && rm -rf vendor composer.lock .phpunit.cache output
+
+php-info:
+	$(PHP) php/bin/resp-bench --info
 
 # ============================================================================
 # Node.js Engine

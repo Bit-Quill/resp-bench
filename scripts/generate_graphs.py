@@ -71,6 +71,9 @@ DRIVER_LANGUAGE_MAP = {
     # C# drivers
     "stackexchange-redis": "csharp",
     "valkey-glide-csharp": "csharp",
+    # PHP drivers
+    "valkey-glide-php": "php",
+    "phpredis": "php",
     # Node.js drivers
     "valkey-glide-node": "node",
     "ioredis": "node",
@@ -126,7 +129,7 @@ def parse_args():
         # Keep in sync with the values in DRIVER_LANGUAGE_MAP — argparse rejects
         # anything not listed here, so a language added to the map alone fails at
         # the CLI rather than silently producing empty graphs.
-        choices=["java", "ruby", "csharp", "node", "python"],
+        choices=["java", "ruby", "csharp", "node", "python", "php"],
         help="Filter results by language (only include drivers for this language)",
     )
     parser.add_argument(

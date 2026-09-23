@@ -1,0 +1,45 @@
+{
+    "schema_version": "1.0",
+    "benchmark_profile": {
+        "name": "PHP Smoke Test",
+        "description": "Short two-phase workload for server-free e2e testing"
+    },
+    "phases": [
+        {
+            "id": "WARMUP",
+            "connections": 4,
+            "completion": {
+                "type": "requests",
+                "requests": 400
+            },
+            "keyspace": {
+                "keys_count": 1000,
+                "key_size_bytes": 16,
+                "key_prefix": "bench:",
+                "generation_alg": "sequential_int"
+            },
+            "commands": [
+                {"command": "set", "weight": 1.0, "data_size_bytes": 64}
+            ]
+        },
+        {
+            "id": "STEADY",
+            "connections": 4,
+            "completion": {
+                "type": "requests",
+                "requests": 1000
+            },
+            "keyspace": {
+                "keys_count": 1000,
+                "key_size_bytes": 16,
+                "key_prefix": "bench:",
+                "generation_alg": "uniform_rand",
+                "seed": 12345
+            },
+            "commands": [
+                {"command": "get", "weight": 0.8},
+                {"command": "set", "weight": 0.2, "data_size_bytes": 64}
+            ]
+        }
+    ]
+}
