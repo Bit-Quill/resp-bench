@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/resp-bench/go/internal/client"
 	"github.com/resp-bench/go/internal/config"
@@ -75,6 +77,18 @@ func run() int {
 	}
 
 	b := engine.New(host, port, driverCfg, workloadCfg, *metrics, *commitID, logger)
+
+	// Translate SIGINT/SIGTERM into a graceful "interrupt current phase" signal
+	// so the in-flight phase is recorded as INTERRUPTED rather than the process
+	// being killed with no row written.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		logger.Println("interrupt received; stopping current phase...")
+		b.SetInterrupted()
+	}()
+
 	exitCode, err := b.Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

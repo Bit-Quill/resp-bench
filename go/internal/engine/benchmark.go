@@ -15,17 +15,21 @@ import (
 
 // Phase status strings written to the NDJSON output.
 const (
-	StatusCompleted = "COMPLETED"
-	StatusError     = "ERROR"
+	StatusCompleted   = "COMPLETED"
+	StatusError       = "ERROR"
+	StatusInterrupted = "INTERRUPTED"
 )
 
 // Benchmark orchestrates a workload against a driver, writing per-phase NDJSON.
 //
-// Concurrency model: one goroutine per connection. For a request-based phase the
-// budget is a single shared atomic counter claimed one request at a time (not
-// pre-divided per worker), so a slow worker never leaves the target unmet. Each
-// worker records into its own lock-free collector; collectors are merged after
-// the phase, widening the window to min(start)/max(stop).
+// Concurrency model: one client per connection; each connection is driven by
+// pipeline_depth worker goroutines that share that connection (so raising the
+// depth adds in-flight requests without changing which keys a connection
+// touches). For a request-based phase the budget is a single shared atomic
+// counter claimed one request at a time (not pre-divided per worker), so a slow
+// worker never leaves the target unmet. Each worker records into its own
+// lock-free collector; collectors are merged after the phase, widening the
+// window to min(start)/max(stop).
 type Benchmark struct {
 	host     string
 	port     int
@@ -34,6 +38,10 @@ type Benchmark struct {
 	writer   *metrics.NdjsonWriter
 	commitID string
 	logger   *log.Logger
+
+	// interrupted is set (via SetInterrupted) when a signal handler wants the
+	// current phase to stop early and be reported as INTERRUPTED.
+	interrupted atomic.Bool
 }
 
 // New builds a Benchmark engine.
@@ -50,10 +58,14 @@ func New(host string, port int, driver config.DriverConfig, workload config.Work
 	}
 }
 
-// Run executes all phases. It returns a non-zero exit code if any phase failed,
-// so callers can propagate it as the process exit status.
+// SetInterrupted signals that running/remaining phases should stop early and be
+// reported as INTERRUPTED. Safe to call from a signal handler goroutine.
+func (b *Benchmark) SetInterrupted() { b.interrupted.Store(true) }
+
+// Run executes all phases. It returns a non-zero exit code if any phase failed
+// or was interrupted, so callers can propagate it as the process exit status.
 func (b *Benchmark) Run() (int, error) {
-	if err := b.rejectUnsupportedKnobs(); err != nil {
+	if err := b.validateKnobs(); err != nil {
 		return 1, err
 	}
 
@@ -71,50 +83,53 @@ func (b *Benchmark) Run() (int, error) {
 		if status != StatusCompleted {
 			exitCode = 1
 		}
+		if b.interrupted.Load() {
+			break
+		}
 	}
 	b.logger.Printf("Benchmark completed")
 	return exitCode, nil
 }
 
-// rejectUnsupportedKnobs fails loudly for config knobs this engine does not
-// honor, rather than silently ignoring them and misreporting results.
-func (b *Benchmark) rejectUnsupportedKnobs() error {
+// validateKnobs rejects config values that are structurally invalid. Unlike the
+// earlier version, pipeline_depth, cps_limit, and command_timeout_ms are now
+// honored, so they are no longer rejected — only nonsensical values are.
+func (b *Benchmark) validateKnobs() error {
 	for _, p := range b.workload.Phases {
-		if p.PipelineDepth > 1 {
-			return fmt.Errorf("phase %s: pipeline_depth > 1 is not supported by the Go engine", p.ID)
+		if p.PipelineDepth < 0 {
+			return fmt.Errorf("phase %s: pipeline_depth must be >= 1", p.ID)
 		}
-		if p.CpsLimit > 0 {
-			return fmt.Errorf("phase %s: cps_limit is not supported by the Go engine", p.ID)
-		}
-		if p.CommandTimeout != nil {
-			return fmt.Errorf("phase %s: command_timeout_ms is not supported by the Go engine", p.ID)
+		if p.CommandTimeout != nil && *p.CommandTimeout < 0 {
+			return fmt.Errorf("phase %s: command_timeout_ms must be >= 0", p.ID)
 		}
 	}
 	return nil
 }
 
-// setupMetadata connects a sample client to read the driver version. Failure is
-// non-fatal (metadata falls back to "unknown").
+// setupMetadata connects a sample client to read the driver version and details.
+// Failure is non-fatal (metadata falls back to "unknown").
 func (b *Benchmark) setupMetadata() {
-	sample, err := client.CreateAndConnect(b.host, b.port, b.driver)
+	sample, err := client.CreateAndConnect(b.host, b.port, b.driver, 1)
 	if err != nil {
 		b.logger.Printf("metadata: could not connect sample client: %v", err)
-		b.writer.SetMetadata(b.commitID, b.driver.DriverID, "unknown", b.driver.SecondaryDriverID(), "")
+		b.writer.SetMetadata(b.commitID, b.driver.DriverID, "unknown", b.driver.SecondaryDriverID(), "", nil)
 		return
 	}
 	defer sample.Close()
 	b.writer.SetMetadata(b.commitID, b.driver.DriverID, sample.DriverVersion(),
-		b.driver.SecondaryDriverID(), sample.SecondaryDriverVersion())
+		b.driver.SecondaryDriverID(), sample.SecondaryDriverVersion(), client.DriverDetails(sample))
 }
 
 // executePhase runs a single phase and writes its NDJSON record.
 func (b *Benchmark) executePhase(phase config.PhaseConfig) (string, error) {
-	b.logger.Printf("=== phase %s (%s): connections=%d ===", phase.ID, phase.Description, phase.Connections)
+	depth := phase.EffectivePipelineDepth()
+	b.logger.Printf("=== phase %s (%s): connections=%d pipeline_depth=%d ===",
+		phase.ID, phase.Description, phase.Connections, depth)
 
 	merged := metrics.NewCollector()
-	status, err := b.runWorkers(phase, merged)
+	status, socketsPerClient, err := b.runPhase(phase, merged)
 
-	if werr := b.writer.WritePhaseResults(phase.ID, status, phase.Connections, merged); werr != nil {
+	if werr := b.writer.WritePhaseResults(phase.ID, status, phase.Connections, depth, socketsPerClient, merged); werr != nil {
 		return status, fmt.Errorf("write phase results: %w", werr)
 	}
 
@@ -128,26 +143,80 @@ func (b *Benchmark) executePhase(phase config.PhaseConfig) (string, error) {
 	return status, err
 }
 
-// runWorkers spawns one goroutine per connection, sharing a request budget, and
-// merges the results. Returns the phase status.
-func (b *Benchmark) runWorkers(phase config.PhaseConfig, merged *metrics.Collector) (string, error) {
+// runPhase creates the connections, warms up, runs the workload, and merges the
+// per-worker collectors. It returns the phase status and the sockets-per-client
+// count reported by the driver.
+func (b *Benchmark) runPhase(phase config.PhaseConfig, merged *metrics.Collector) (string, int, error) {
+	depth := phase.EffectivePipelineDepth()
 	workerCount := phase.Connections
 	if workerCount < 1 {
 		workerCount = 1
 	}
+	activeConns := b.activeConnectionCount(phase, workerCount)
 
-	activeWorkers := b.activeWorkerCount(phase, workerCount)
+	// --- create connections (outside the measured window) -------------------
+	// A cps_limit throttles connection creation.
+	cpsLimiter := NewRateLimiter(phase.CpsLimit)
+	clients := make([]client.BenchmarkClient, 0, activeConns)
+	closeAll := func() {
+		for _, c := range clients {
+			_ = c.Close()
+		}
+	}
+	for i := 0; i < activeConns; i++ {
+		cpsLimiter.Acquire()
+		c, err := client.CreateAndConnect(b.host, b.port, b.driver, depth)
+		if err != nil {
+			closeAll()
+			// A connection failure still needs a real (empty) window so the row
+			// is not a null-timestamp schema violation.
+			merged.Start()
+			merged.Stop()
+			return StatusError, 1, fmt.Errorf("create connection %d: %w", i, err)
+		}
+		clients = append(clients, c)
+	}
+	defer closeAll()
+
+	socketsPerClient := 1
+	if len(clients) > 0 {
+		socketsPerClient = client.SocketsPerClient(clients[0])
+	}
+
+	// --- warmup (before the clock): exactly warmup_requests PINGs per client --
+	if err := b.runWarmup(clients, phase.WarmupRequests); err != nil {
+		merged.Start()
+		merged.Stop()
+		return StatusError, socketsPerClient, err
+	}
+
+	// --- workload -----------------------------------------------------------
+	status := b.runWorkload(phase, clients, activeConns, workerCount, merged)
+	return status, socketsPerClient, nil
+}
+
+// runWorkload spawns depth worker goroutines per connection, all sharing a
+// single request budget, and merges their collectors. Returns the phase status.
+func (b *Benchmark) runWorkload(phase config.PhaseConfig, clients []client.BenchmarkClient,
+	activeConns, workerCount int, merged *metrics.Collector) string {
+
+	depth := phase.EffectivePipelineDepth()
 	keyGenSet := NewKeyGenSet(phase.Keyspace)
+	cmds, err := command.NewAll(phase.Commands)
+	if err != nil {
+		merged.Start()
+		merged.Stop()
+		b.logger.Printf("command build error: %v", err)
+		return StatusError
+	}
 
-	// Shared request budget for request-based phases: one atomic counter for the
-	// whole phase, claimed one at a time. -1 means unlimited (duration-based).
+	// Shared request budget: one atomic counter claimed one request at a time.
 	var remaining atomic.Int64
 	if phase.Completion.IsRequestBased() {
 		remaining.Store(int64(phase.Completion.Requests))
 	} else {
 		remaining.Store(-1)
 	}
-
 	var deadline time.Time
 	if phase.Completion.IsDurationBased() {
 		deadline = time.Now().Add(time.Duration(phase.Completion.Seconds) * time.Second)
@@ -157,28 +226,130 @@ func (b *Benchmark) runWorkers(phase config.PhaseConfig, merged *metrics.Collect
 	var wg sync.WaitGroup
 	var failures atomic.Int64
 
-	for i := 0; i < activeWorkers; i++ {
-		wg.Add(1)
-		go func(workerIndex int) {
-			defer wg.Done()
-			if err := b.runWorker(phase, workerIndex, activeWorkers, keyGenSet, &remaining, deadline, merger); err != nil {
-				failures.Add(1)
-				b.logger.Printf("worker %d failed: %v", workerIndex, err)
-			}
-		}(i)
+	for connIdx := 0; connIdx < activeConns; connIdx++ {
+		// One key generator + selector per CONNECTION, shared by that
+		// connection's pipeline_depth workers, so the key stream stays a property
+		// of the connection regardless of depth.
+		keyGen := keyGenSet.ForWorker(connIdx)
+		selector := NewCommandSelector(cmds)
+		// One rate limiter per connection, shared across its depth slots, so the
+		// connection's rps share is enforced across all its in-flight requests
+		// (not multiplied by depth).
+		connRps := b.connectionRps(phase, workerCount, connIdx)
+		limiter := NewRateLimiter(connRps)
+		c := clients[connIdx]
+
+		for slot := 0; slot < depth; slot++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				coll := metrics.NewCollector()
+				coll.Start()
+				b.pipelineWorker(c, keyGen, selector, limiter, &remaining, deadline,
+					phase.Completion.IsDurationBased(), coll, &failures)
+				coll.Stop()
+				merger.Merge(coll)
+			}()
+		}
 	}
 	wg.Wait()
 
-	if failures.Load() > 0 {
-		return StatusError, fmt.Errorf("%d of %d workers failed", failures.Load(), activeWorkers)
+	if b.interrupted.Load() {
+		return StatusInterrupted
 	}
-	return StatusCompleted, nil
+	if failures.Load() > 0 {
+		return StatusError
+	}
+	// A phase where nothing succeeded produced no usable data.
+	if merged.TotalRequests() > 0 && merged.TotalRequests() == merged.TotalErrors() {
+		b.logger.Printf("all %d requests failed; reporting phase as ERROR", merged.TotalRequests())
+		return StatusError
+	}
+	return StatusCompleted
 }
 
-// activeWorkerCount caps the number of working goroutines. When an rps limit is
-// lower than the connection count, only rps_limit workers run (each at ~1 rps);
-// otherwise flooring/duplicating the per-worker share would overshoot the target.
-func (b *Benchmark) activeWorkerCount(phase config.PhaseConfig, workerCount int) int {
+// pipelineWorker is one in-flight slot on a shared connection. It draws from the
+// shared budget (or runs until the deadline) and records into its own collector.
+func (b *Benchmark) pipelineWorker(c client.BenchmarkClient, keyGen *KeyGenerator,
+	selector *CommandSelector, limiter *RateLimiter, remaining *atomic.Int64,
+	deadline time.Time, durationBased bool, coll *metrics.Collector, failures *atomic.Int64) {
+
+	consecutiveFailures := 0
+	for {
+		if b.interrupted.Load() {
+			return
+		}
+		if durationBased {
+			if !time.Now().Before(deadline) {
+				return
+			}
+		} else if remaining.Add(-1) < 0 {
+			return
+		}
+
+		limiter.Acquire()
+		cmd := selector.Select()
+		res := cmd.Execute(c, keyGen)
+		coll.Record(res)
+
+		if res.Success {
+			consecutiveFailures = 0
+			continue
+		}
+		// Back off a permanently-failing connection so it cannot spin at full CPU
+		// inflating the error count.
+		consecutiveFailures++
+		if consecutiveFailures == 1 {
+			// First failure on this slot counts toward phase failure detection.
+			failures.Add(1)
+		}
+		if consecutiveFailures >= failureBackoffAfter {
+			d := time.Duration(consecutiveFailures-failureBackoffAfter+1) * time.Millisecond
+			if d > maxFailureBackoff {
+				d = maxFailureBackoff
+			}
+			time.Sleep(d)
+		}
+	}
+}
+
+const (
+	failureBackoffAfter = 5
+	maxFailureBackoff   = 100 * time.Millisecond
+)
+
+// runWarmup issues exactly warmup_requests PINGs per client (not scaled by depth
+// or split across connections), matching Java/Ruby/Python. A failed warmup PING
+// fails the phase fast rather than running a whole phase that records only errors.
+func (b *Benchmark) runWarmup(clients []client.BenchmarkClient, warmupRequests int) error {
+	if warmupRequests <= 0 {
+		return nil
+	}
+	var wg sync.WaitGroup
+	var firstErr atomic.Value // error
+	for _, c := range clients {
+		wg.Add(1)
+		go func(c client.BenchmarkClient) {
+			defer wg.Done()
+			for i := 0; i < warmupRequests; i++ {
+				if r := c.Ping(); !r.Success() {
+					firstErr.CompareAndSwap(nil, fmt.Errorf("warmup PING failed: %v", r.Err))
+					return
+				}
+			}
+		}(c)
+	}
+	wg.Wait()
+	if v := firstErr.Load(); v != nil {
+		return v.(error)
+	}
+	return nil
+}
+
+// activeConnectionCount caps the number of connections that do work. When an rps
+// limit is lower than the connection count, only rps_limit connections run,
+// otherwise flooring the per-connection share would overshoot the target.
+func (b *Benchmark) activeConnectionCount(phase config.PhaseConfig, workerCount int) int {
 	if phase.HasRpsLimit() && phase.RpsLimit < workerCount {
 		if phase.RpsLimit < 1 {
 			return 1
@@ -188,80 +359,13 @@ func (b *Benchmark) activeWorkerCount(phase config.PhaseConfig, workerCount int)
 	return workerCount
 }
 
-// runWorker is the per-connection hot loop. It connects, warms up (PING only),
-// starts its own clock, then drains the shared budget (or runs until deadline),
-// and finally merges its collector into the shared destination.
-func (b *Benchmark) runWorker(phase config.PhaseConfig, workerIndex, workerCount int,
-	keyGenSet *KeyGenSet, remaining *atomic.Int64, deadline time.Time, merger *metrics.SafeMerger) (err error) {
-
-	collector := metrics.NewCollector()
-
-	c, err := client.CreateAndConnect(b.host, b.port, b.driver)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-	defer func() {
-		_ = c.Close()
-		// Always merge whatever this worker collected, even on failure, so the
-		// phase window and partial counts are preserved.
-		merger.Merge(collector)
-	}()
-
-	cmds, err := command.NewAll(phase.Commands)
-	if err != nil {
-		return err
-	}
-	selector := NewCommandSelector(cmds)
-	keyGen := keyGenSet.ForWorker(workerIndex)
-
-	// Per-worker rps share: the phase limit split across active workers with the
-	// remainder distributed to the first workers.
-	rps := b.workerRps(phase, workerCount, workerIndex)
-	limiter := NewRateLimiter(rps)
-
-	// Warmup runs BEFORE the clock starts and uses PING so it does not consume
-	// from the workload key sequence.
-	b.runWarmup(c, phase.WarmupRequests, workerCount, workerIndex)
-
-	collector.Start()
-	defer collector.Stop()
-
-	durationBased := phase.Completion.IsDurationBased()
-	for {
-		if durationBased {
-			if !time.Now().Before(deadline) {
-				return nil
-			}
-		} else {
-			// Claim one request from the shared budget.
-			if remaining.Add(-1) < 0 {
-				return nil
-			}
-		}
-		limiter.Acquire()
-		cmd := selector.Select()
-		collector.Record(cmd.Execute(c, keyGen))
-	}
-}
-
-// runWarmup issues this worker's share of PING warmup requests.
-func (b *Benchmark) runWarmup(c client.BenchmarkClient, warmupRequests, workerCount, workerIndex int) {
-	if warmupRequests <= 0 {
-		return
-	}
-	share := splitShare(warmupRequests, workerCount, workerIndex)
-	for i := 0; i < share; i++ {
-		c.Ping()
-	}
-}
-
-// workerRps returns this worker's rps share, or -1 for unlimited. The limit is
-// split across active workers with the remainder distributed; idle workers get 0.
-func (b *Benchmark) workerRps(phase config.PhaseConfig, workerCount, workerIndex int) int {
+// connectionRps returns a connection's rps share, or -1 for unlimited. The phase
+// limit is split across active connections with the remainder distributed.
+func (b *Benchmark) connectionRps(phase config.PhaseConfig, workerCount, connIdx int) int {
 	if !phase.HasRpsLimit() {
 		return -1
 	}
-	return splitShare(phase.RpsLimit, workerCount, workerIndex)
+	return splitShare(phase.RpsLimit, workerCount, connIdx)
 }
 
 // splitShare distributes total across workerCount, giving the first

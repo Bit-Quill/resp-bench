@@ -11,14 +11,15 @@ using the resp-bench Go engine.
 
 | Driver | Package | Status |
 |--------|---------|--------|
-| `go-redis` | [github.com/redis/go-redis/v9](https://github.com/redis/go-redis) | Implemented (RESP3, retries disabled, one socket per connection) |
-| `valkey-glide-go` | Valkey GLIDE Go client | Stub — client library wiring pending |
+| `go-redis` | [github.com/redis/go-redis/v9](https://github.com/redis/go-redis) | Implemented (RESP3, retries disabled, pool bounded to pipeline_depth) |
+| `valkey-glide-go` | [github.com/valkey-io/valkey-glide/go/v2](https://github.com/valkey-io/valkey-glide) | Implemented (multiplexed, 1 socket per client) |
 
 The `recording` driver is used for server-free CI tests and is not part of the
-performance comparison. `go-redis` is a working driver; `valkey-glide-go` is a
-stub that fails loudly on connect until its client library is wired in (see
-[../go/README.md](../go/README.md#wiring-a-real-driver)); it never silently
-reports success.
+performance comparison. Both real drivers are implemented and validated against a
+live Valkey server. They differ in how `pipeline_depth` is realized: go-redis
+uses a connection pool (so `sockets_per_client == pipeline_depth`), while GLIDE
+multiplexes over a single socket (`sockets_per_client == 1` at any depth) — the
+metrics output records both so the two are directly comparable.
 
 ## Engine Notes
 

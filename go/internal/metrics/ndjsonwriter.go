@@ -20,6 +20,7 @@ type NdjsonWriter struct {
 	primaryDriverVersion   string
 	secondaryDriverID      string
 	secondaryDriverVersion string
+	driverDetails          map[string]any
 	hasMetadata            bool
 }
 
@@ -28,13 +29,17 @@ func NewNdjsonWriter(path string) *NdjsonWriter {
 	return &NdjsonWriter{path: path}
 }
 
-// SetMetadata records the run metadata written into every phase line.
-func (w *NdjsonWriter) SetMetadata(commitID, driverID, primaryVersion, secondaryID, secondaryVersion string) {
+// SetMetadata records the run metadata written into every phase line. Extra
+// driverDetails keys (negotiated protocol, parser, pipelining mode) are merged
+// into the metadata block; downstream tooling reads metadata by key, so extra
+// keys are harmless to engines that omit them.
+func (w *NdjsonWriter) SetMetadata(commitID, driverID, primaryVersion, secondaryID, secondaryVersion string, driverDetails map[string]any) {
 	w.commitID = commitID
 	w.driverID = driverID
 	w.primaryDriverVersion = primaryVersion
 	w.secondaryDriverID = secondaryID
 	w.secondaryDriverVersion = secondaryVersion
+	w.driverDetails = driverDetails
 	w.hasMetadata = true
 }
 
@@ -74,28 +79,28 @@ type phaseBlock struct {
 	FinishTimestamp *string `json:"finish_timestamp"`
 	DurationMs      int64   `json:"duration_ms"`
 	Connections     int     `json:"connections"`
+	// Additive, optional fields. `connections` alone cannot distinguish a
+	// pipelined run from a serial one, and the concurrency actually applied is
+	// connections x pipeline_depth. sockets_per_client is 1 for a multiplexing
+	// driver at any depth, pipeline_depth for a pooling one. Other engines omit
+	// these and downstream tooling reads by key, so they are ignored there.
+	PipelineDepth    int `json:"pipeline_depth"`
+	SocketsPerClient int `json:"sockets_per_client"`
+	TotalSockets     int `json:"total_sockets"`
 }
 
-type metadataBlock struct {
-	CommitID               string `json:"commit_id,omitempty"`
-	Timestamp              string `json:"timestamp"`
-	DriverID               string `json:"driver_id,omitempty"`
-	PrimaryDriverVersion   string `json:"primary_driver_version,omitempty"`
-	SecondaryDriverID      string `json:"secondary_driver_id,omitempty"`
-	SecondaryDriverVersion string `json:"secondary_driver_version,omitempty"`
-}
-
-// phaseRecord is the full per-phase JSON object. Metrics is always a JSON object
-// ({} when empty), never an array, because the graph consumers index into it.
+// phaseRecord is the full per-phase JSON object. Metadata is a free-form map so
+// driver-detail keys can be merged alongside the fixed keys. Metrics is always a
+// JSON object ({} when empty), never an array, because consumers index into it.
 type phaseRecord struct {
-	Metadata *metadataBlock          `json:"metadata,omitempty"`
+	Metadata map[string]any          `json:"metadata,omitempty"`
 	Phase    phaseBlock              `json:"phase"`
 	Totals   map[string]int64        `json:"totals"`
 	Metrics  map[string]commandBlock `json:"metrics"`
 }
 
 // WritePhaseResults appends a phase record built from the collector.
-func (w *NdjsonWriter) WritePhaseResults(phaseID, status string, connections int, c *Collector) error {
+func (w *NdjsonWriter) WritePhaseResults(phaseID, status string, connections, pipelineDepth, socketsPerClient int, c *Collector) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -103,7 +108,7 @@ func (w *NdjsonWriter) WritePhaseResults(phaseID, status string, connections int
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	rec := w.buildRecord(phaseID, status, connections, c)
+	rec := w.buildRecord(phaseID, status, connections, pipelineDepth, socketsPerClient, c)
 	line, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("marshal phase record: %w", err)
@@ -120,15 +125,21 @@ func (w *NdjsonWriter) WritePhaseResults(phaseID, status string, connections int
 	return nil
 }
 
-func (w *NdjsonWriter) buildRecord(phaseID, status string, connections int, c *Collector) phaseRecord {
+func (w *NdjsonWriter) buildRecord(phaseID, status string, connections, pipelineDepth, socketsPerClient int, c *Collector) phaseRecord {
+	if socketsPerClient < 1 {
+		socketsPerClient = 1
+	}
 	rec := phaseRecord{
 		Phase: phaseBlock{
-			ID:              phaseID,
-			Status:          status,
-			StartTimestamp:  iso8601(c.StartTime()),
-			FinishTimestamp: iso8601(c.StopTime()),
-			DurationMs:      c.DurationMillis(),
-			Connections:     connections,
+			ID:               phaseID,
+			Status:           status,
+			StartTimestamp:   iso8601(c.StartTime()),
+			FinishTimestamp:  iso8601(c.StopTime()),
+			DurationMs:       c.DurationMillis(),
+			Connections:      connections,
+			PipelineDepth:    pipelineDepth,
+			SocketsPerClient: socketsPerClient,
+			TotalSockets:     connections * socketsPerClient,
 		},
 		Totals: map[string]int64{
 			"requests": c.TotalRequests(),
@@ -138,14 +149,31 @@ func (w *NdjsonWriter) buildRecord(phaseID, status string, connections int, c *C
 	}
 
 	if w.hasMetadata {
-		rec.Metadata = &metadataBlock{
-			CommitID:               w.commitID,
-			Timestamp:              time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-			DriverID:               w.driverID,
-			PrimaryDriverVersion:   w.primaryDriverVersion,
-			SecondaryDriverID:      w.secondaryDriverID,
-			SecondaryDriverVersion: w.secondaryDriverVersion,
+		md := map[string]any{
+			"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		}
+		if w.commitID != "" {
+			md["commit_id"] = w.commitID
+		}
+		if w.driverID != "" {
+			md["driver_id"] = w.driverID
+		}
+		if w.primaryDriverVersion != "" {
+			md["primary_driver_version"] = w.primaryDriverVersion
+		}
+		if w.secondaryDriverID != "" {
+			md["secondary_driver_id"] = w.secondaryDriverID
+		}
+		if w.secondaryDriverVersion != "" {
+			md["secondary_driver_version"] = w.secondaryDriverVersion
+		}
+		// Merge driver-detail keys without overwriting the fixed keys.
+		for k, v := range w.driverDetails {
+			if _, exists := md[k]; !exists {
+				md[k] = v
+			}
+		}
+		rec.Metadata = md
 	}
 
 	for name, cm := range c.Commands() {

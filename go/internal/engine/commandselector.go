@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/resp-bench/go/internal/command"
@@ -11,9 +12,13 @@ import (
 // cumulative weights for O(n) selection. Each selector holds its own RNG; the
 // choice RNG is intentionally NOT the Java-compatible one (command selection is
 // not part of cross-engine key parity).
+//
+// A selector is shared across a connection's pipeline_depth worker goroutines,
+// so Select is guarded by a mutex (math/rand.Rand is not concurrency-safe).
 type CommandSelector struct {
 	commands   []command.Command
 	cumulative []float64
+	mu         sync.Mutex
 	rng        *rand.Rand
 }
 
@@ -39,9 +44,11 @@ func NewCommandSelector(cmds []command.Command) *CommandSelector {
 	}
 }
 
-// Select returns a command chosen by weight.
+// Select returns a command chosen by weight. Safe for concurrent callers.
 func (s *CommandSelector) Select() command.Command {
+	s.mu.Lock()
 	r := s.rng.Float64()
+	s.mu.Unlock()
 	for i, threshold := range s.cumulative {
 		if r <= threshold {
 			return s.commands[i]

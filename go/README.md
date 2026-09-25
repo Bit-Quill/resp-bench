@@ -10,13 +10,15 @@ driver configs drive every engine identically.
 |--------------------|--------------------------------------|------------------------|
 | `recording`        | in-memory (server-free)              | ✅ implemented          |
 | `go-redis`         | `github.com/redis/go-redis/v9`       | ✅ implemented          |
-| `valkey-glide-go`  | Valkey GLIDE Go client               | 🚧 stub — needs wiring |
+| `valkey-glide-go`  | `github.com/valkey-io/valkey-glide/go/v2` | ✅ implemented     |
 
-The `recording` driver runs the full engine path (key generation, command
-selection, metrics, NDJSON output) without a server and is used by the test
-suite. `go-redis` is a working driver (RESP3, retries disabled, one socket per
-connection). `valkey-glide-go` is a stub that **fails loudly on connect** until
-its client library is wired in (see below) — it never silently reports success.
+The `recording` driver runs the full engine path without a server and is used by
+the unit tests. Both real drivers are fully implemented and validated against a
+live Valkey server:
+- **go-redis**: RESP3, retries disabled, a connection pool bounded to
+  `pipeline_depth` (so `sockets_per_client == pipeline_depth`).
+- **valkey-glide-go**: multiplexes all requests over a single socket, so
+  `pipeline_depth` is satisfied natively and `sockets_per_client == 1` at any depth.
 
 ## Supported Commands
 
@@ -58,7 +60,7 @@ make go-run \
 ```
 
 Exit code: `0` if every phase completed, `1` if any phase failed (a worker
-errored), `2` for usage/config errors.
+errored) or was interrupted, `2` for usage/config errors.
 
 ## Architecture
 
@@ -67,15 +69,17 @@ go/
 ├── cmd/resp-bench/main.go        # CLI entry point
 └── internal/
     ├── config/    # driver + workload JSON parsing (reference defaults)
-    ├── client/    # BenchmarkClient interface, factory, recording + real-driver stubs
+    ├── client/    # BenchmarkClient interface, factory, recording + go-redis + glide drivers
     ├── command/   # GET/SET/PING (+ weighted selection helpers)
     ├── engine/    # JavaRandom, KeyGenerator, RateLimiter, CommandSelector, Benchmark
     └── metrics/   # HdrHistogram, V2 encoder, Collector, NdjsonWriter
 ```
 
-Concurrency model: one goroutine per connection. For a request-based phase the
-budget is a single shared atomic counter claimed one request at a time (not
-pre-divided per worker), so a slow worker never leaves the target unmet. Each
+Concurrency model: one client per connection, driven by `pipeline_depth` worker
+goroutines that share that connection (so raising the depth adds in-flight
+requests without changing which keys the connection touches). For a request-based
+phase the budget is a single shared atomic counter claimed one request at a time
+(not pre-divided per worker), so a slow worker never leaves the target unmet. Each
 worker records into its own lock-free collector; collectors are merged after the
 phase, widening the window to `min(start)`/`max(stop)`.
 
@@ -102,27 +106,35 @@ Parity traps this engine handles (see `docs/ADDING_LANGUAGE.md`):
 - **Shared request budget** and **rate-limit split** across active workers with
   the remainder distributed; a rps limit below the connection count activates
   only `rps_limit` workers instead of flooring each to 1 (which would overshoot).
-- **Fail-loud**: unsupported knobs (`pipeline_depth > 1`, `cps_limit`,
-  `command_timeout_ms`) are rejected; a worker failure marks the phase `ERROR`
-  and returns a non-zero exit code; empty `metrics` serialize as `{}`.
+- **pipeline_depth**: honored — `depth` worker goroutines per connection share
+  one key generator, selector, and rate limiter, so raising the depth changes
+  concurrency without changing the key stream. A pooling driver (go-redis) bounds
+  its pool to the depth; a multiplexing driver (GLIDE) keeps one socket. The
+  output records `pipeline_depth`, `sockets_per_client`, and `total_sockets`.
+- **cps_limit**: honored — a leaky-bucket limiter throttles connection creation.
+- **warmup**: exactly `warmup_requests` PINGs **per client**, before the clock,
+  and a failed warmup PING fails the phase fast.
+- **Statuses**: `COMPLETED` / `ERROR` / `INTERRUPTED` (SIGINT/SIGTERM stop the
+  current phase gracefully). Anything short of `COMPLETED` yields a non-zero exit.
+- **Fail-loud & robust**: a worker failure marks the phase `ERROR`; a phase where
+  every request failed is `ERROR`; empty `metrics` serialize as `{}`.
 
-## Wiring a real driver
+## Drivers
 
-`go-redis` is fully implemented in `internal/client/goredis.go` (RESP3, retries
-disabled so a failure is recorded as an error rather than a retried success, one
-pooled socket per connection). Run the gated live test against a server with:
+Both real drivers are implemented and validated against a live Valkey server;
+the gated live tests skip unless `VALKEY_HOST` is set:
 
 ```bash
-VALKEY_HOST=localhost VALKEY_PORT=6379 go test ./internal/engine/ -run GoRedis
+VALKEY_HOST=localhost VALKEY_PORT=6379 go test ./internal/engine/ -run 'GoRedis|Glide'
 ```
 
-`valkey-glide-go` is still a stub in `internal/client/realdrivers.go`. To wire it:
+- `internal/client/goredis.go` — go-redis (RESP3, retries disabled, pool bounded
+  to `pipeline_depth`).
+- `internal/client/glide.go` — Valkey GLIDE Go (multiplexed, one socket per client).
 
-1. Add the Valkey GLIDE Go module to `go/go.mod`.
-2. Hold the client handle in `GlideClient`.
-3. Implement `Connect`, `Get`, `Set`, `Ping`, `Close`, and `DriverVersion`,
-   timing each call yourself (mirror `GoRedisClient.measure`) and returning the
-   latency in the `TimedResult`. Keep the `TimedResult` contract identical —
-   `Success()` is `Err == nil`, `LatencyMicros` in microseconds.
-4. The gated live test pattern in `goredis_live_test.go` (skip unless
-   `VALKEY_HOST` is set) can be copied for the GLIDE driver.
+### Adding another driver
+
+Implement `BenchmarkClient` (and optionally `PipelineAware` / `DetailedClient`),
+register it in `internal/client/factory.go`, and time each call yourself (mirror
+`GoRedisClient.measure`). Keep the `TimedResult` contract identical —
+`Success()` is `Err == nil`, `LatencyMicros` in microseconds.

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/resp-bench/go/internal/config"
 )
@@ -100,45 +101,134 @@ func TestEngineMetricsIsObject(t *testing.T) {
 	}
 }
 
-// TestRejectPipelineDepth: unsupported knobs must fail loudly.
-func TestRejectPipelineDepth(t *testing.T) {
+// TestPipelineDepthHonored: pipeline_depth > 1 now runs (depth workers per
+// connection sharing the connection) and still hits the exact request target.
+func TestPipelineDepthHonored(t *testing.T) {
 	wl, err := config.ParseWorkloadConfig([]byte(`{
 	  "benchmark_profile": {"name": "PD"},
-	  "phases": [{"id":"P","connections":1,"pipeline_depth":8,
-	    "commands":[{"command":"get","weight":1.0}],
-	    "keyspace":{"keys_count":10},"completion":{"type":"requests","requests":10}}]
+	  "phases": [{"id":"P","connections":2,"pipeline_depth":4,
+	    "commands":[{"command":"get","weight":0.5},{"command":"set","weight":0.5,"data_size_bytes":16}],
+	    "keyspace":{"keys_count":100,"key_size_bytes":16,"key_prefix":"pd:","generation_alg":"sequential_int"},
+	    "completion":{"type":"requests","requests":800}}]
 	}`))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	out := filepath.Join(t.TempDir(), "m.ndjson")
+	out := filepath.Join(t.TempDir(), "pd.ndjson")
 	b := New("localhost", 6379, recordingDriver(), wl, out, "t", quietLogger())
 	code, err := b.Run()
-	if err == nil {
-		t.Fatal("expected error for pipeline_depth > 1")
+	if err != nil {
+		t.Fatalf("run: %v", err)
 	}
-	if code == 0 {
-		t.Fatal("expected non-zero exit code for unsupported knob")
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
 	}
-	if !strings.Contains(err.Error(), "pipeline_depth") {
-		t.Fatalf("error should mention pipeline_depth: %v", err)
+	var rec map[string]any
+	data, _ := os.ReadFile(out)
+	_ = json.Unmarshal([]byte(strings.TrimSpace(string(data))), &rec)
+	phase := rec["phase"].(map[string]any)
+	if phase["status"] != StatusCompleted {
+		t.Fatalf("status=%v", phase["status"])
+	}
+	if got := int(phase["pipeline_depth"].(float64)); got != 4 {
+		t.Fatalf("pipeline_depth in output=%d, want 4", got)
+	}
+	totals := rec["totals"].(map[string]any)
+	if got := int(totals["requests"].(float64)); got != 800 {
+		t.Fatalf("requests=%d, want 800", got)
 	}
 }
 
-// TestUnknownDriverFailsLoudly: a real-driver stub must not report success.
-func TestUnknownDriverFailsLoudly(t *testing.T) {
+// TestCpsLimitAccepted: a cps_limit is now honored (no longer rejected); the
+// phase completes normally.
+func TestCpsLimitAccepted(t *testing.T) {
+	wl, err := config.ParseWorkloadConfig([]byte(`{
+	  "benchmark_profile": {"name": "CPS"},
+	  "phases": [{"id":"P","connections":3,"cps_limit":1000,
+	    "commands":[{"command":"get","weight":1.0}],
+	    "keyspace":{"keys_count":50,"key_size_bytes":16,"key_prefix":"c:","generation_alg":"sequential_int"},
+	    "completion":{"type":"requests","requests":60}}]
+	}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "cps.ndjson")
+	b := New("localhost", 6379, recordingDriver(), wl, out, "t", quietLogger())
+	code, err := b.Run()
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("expected exit 0 (cps_limit honored), got %d", code)
+	}
+}
+
+// TestNdjsonEnrichmentFields: the output carries pipeline_depth,
+// sockets_per_client, and total_sockets.
+func TestNdjsonEnrichmentFields(t *testing.T) {
+	recs := runPhases(t, strings.Replace(requestWorkload, "%d", "2", 1), 2)
+	phase := recs[0]["phase"].(map[string]any)
+	for _, k := range []string{"pipeline_depth", "sockets_per_client", "total_sockets"} {
+		if _, ok := phase[k]; !ok {
+			t.Fatalf("phase block missing enrichment field %q", k)
+		}
+	}
+	if int(phase["pipeline_depth"].(float64)) != 1 {
+		t.Fatalf("default pipeline_depth should be 1")
+	}
+}
+
+// TestConnectFailureFailsLoudly: a driver that cannot reach the server must not
+// report success — the phase is ERROR with a non-zero exit. Uses the go-redis
+// driver against a dead port (works without any live server available).
+func TestConnectFailureFailsLoudly(t *testing.T) {
 	wl, _ := config.ParseWorkloadConfig([]byte(strings.Replace(requestWorkload, "%d", "2", 1)))
 	out := filepath.Join(t.TempDir(), "m.ndjson")
-	driver := config.DriverConfig{DriverID: "valkey-glide-go", Mode: "standalone"}
-	b := New("localhost", 6379, driver, wl, out, "t", quietLogger())
+	driver := config.DriverConfig{DriverID: "go-redis", Mode: "standalone"}
+	// Port 1 is not a listening server; connect must fail.
+	b := New("127.0.0.1", 1, driver, wl, out, "t", quietLogger())
 	code, _ := b.Run()
 	if code == 0 {
 		t.Fatal("expected non-zero exit code when the driver cannot connect")
 	}
-	// The phase should be recorded as ERROR.
 	data, _ := os.ReadFile(out)
 	if !strings.Contains(string(data), `"status":"ERROR"`) {
 		t.Fatalf("expected ERROR status in output, got: %s", data)
+	}
+}
+
+// TestInterruptedStatus: signaling interrupt mid-phase yields INTERRUPTED and a
+// non-zero exit code, and still writes a phase row.
+func TestInterruptedStatus(t *testing.T) {
+	// A long duration-based phase so the interrupt lands mid-run.
+	wl, err := config.ParseWorkloadConfig([]byte(`{
+	  "benchmark_profile": {"name": "INT"},
+	  "phases": [{"id":"P","connections":2,
+	    "commands":[{"command":"get","weight":1.0}],
+	    "keyspace":{"keys_count":100,"key_size_bytes":16,"key_prefix":"i:","generation_alg":"sequential_int"},
+	    "completion":{"type":"duration","seconds":30}}]
+	}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "int.ndjson")
+	b := New("localhost", 6379, recordingDriver(), wl, out, "t", quietLogger())
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		b.SetInterrupted()
+	}()
+
+	code, err := b.Run()
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if code == 0 {
+		t.Fatal("expected non-zero exit for interrupted run")
+	}
+	data, _ := os.ReadFile(out)
+	if !strings.Contains(string(data), `"status":"INTERRUPTED"`) {
+		t.Fatalf("expected INTERRUPTED status, got: %s", data)
 	}
 }
 

@@ -21,22 +21,67 @@ import (
 //     "one in-flight request per connection" model of the other drivers.
 //   - values kept as raw bytes (no decode overhead).
 type GoRedisClient struct {
-	rdb *redis.Client
-	ctx context.Context
+	rdb         *redis.Client
+	ctx         context.Context
+	maxInFlight int
 }
 
 // NewGoRedisClient returns an unconnected go-redis client.
 func NewGoRedisClient() *GoRedisClient {
-	return &GoRedisClient{ctx: context.Background()}
+	return &GoRedisClient{ctx: context.Background(), maxInFlight: 1}
+}
+
+// SetMaxInFlight declares the pipeline depth this client will be driven at. The
+// connection pool is bounded to this so pipeline_depth > 1 checks out at most
+// that many sockets — keeping the client==connection(s) accounting honest.
+func (c *GoRedisClient) SetMaxInFlight(depth int) {
+	if depth < 1 {
+		depth = 1
+	}
+	c.maxInFlight = depth
+}
+
+// SocketsPerClient reports the pool size (one socket per in-flight slot). go-redis
+// pipelines via a connection pool, unlike a multiplexing driver.
+func (c *GoRedisClient) SocketsPerClient() int { return c.maxInFlight }
+
+// DriverDetails records the pinned protocol/retry settings and pipelining model.
+func (c *GoRedisClient) DriverDetails() map[string]any {
+	return map[string]any{
+		"resp_protocol":   3,
+		"retries":         0,
+		"response_parser": "go-redis",
+		"pipelining":      "connection-pool (up to pipeline_depth sockets per client)",
+	}
+}
+
+// Prime materializes the whole pool before the measured window. go-redis opens a
+// pooled connection lazily, so at depth N only one socket exists after Connect;
+// issuing N concurrent PINGs forces all N to be created and handshaked now.
+func (c *GoRedisClient) Prime() error {
+	if c.maxInFlight <= 1 || c.rdb == nil {
+		return nil
+	}
+	errs := make(chan error, c.maxInFlight)
+	for i := 0; i < c.maxInFlight; i++ {
+		go func() { errs <- c.rdb.Ping(c.ctx).Err() }()
+	}
+	var firstErr error
+	for i := 0; i < c.maxInFlight; i++ {
+		if e := <-errs; e != nil && firstErr == nil {
+			firstErr = e
+		}
+	}
+	return firstErr
 }
 
 // Connect opens the client and eagerly pings so failures surface here.
 func (c *GoRedisClient) Connect(host string, port int, cfg config.DriverConfig) error {
 	opt := &redis.Options{
 		Addr:       host + ":" + itoa(port),
-		Protocol:   3,  // RESP3, pinned so behavior does not depend on defaults
-		MaxRetries: -1, // disable retries: one round trip per request
-		PoolSize:   1,  // one socket per "connection", like the other drivers
+		Protocol:   3,             // RESP3, pinned so behavior does not depend on defaults
+		MaxRetries: -1,            // disable retries: one round trip per request
+		PoolSize:   c.maxInFlight, // one socket per in-flight slot (pipeline_depth)
 	}
 
 	if tlsCfg := buildTLSConfig(cfg); tlsCfg != nil {
