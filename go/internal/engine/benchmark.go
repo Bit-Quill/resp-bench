@@ -95,12 +95,12 @@ func (b *Benchmark) Run() (int, error) {
 // earlier version, pipeline_depth, cps_limit, and command_timeout_ms are now
 // honored, so they are no longer rejected — only nonsensical values are.
 func (b *Benchmark) validateKnobs() error {
+	if b.driver.CommandTimeoutMs != nil && *b.driver.CommandTimeoutMs < 0 {
+		return fmt.Errorf("command_timeout_ms must be >= 0")
+	}
 	for _, p := range b.workload.Phases {
 		if p.PipelineDepth < 0 {
 			return fmt.Errorf("phase %s: pipeline_depth must be >= 1", p.ID)
-		}
-		if p.CommandTimeout != nil && *p.CommandTimeout < 0 {
-			return fmt.Errorf("phase %s: command_timeout_ms must be >= 0", p.ID)
 		}
 	}
 	return nil
@@ -224,7 +224,7 @@ func (b *Benchmark) runWorkload(phase config.PhaseConfig, clients []client.Bench
 
 	merger := metrics.NewSafeMerger(merged)
 	var wg sync.WaitGroup
-	var failures atomic.Int64
+	var workerPanics atomic.Int64
 
 	for connIdx := 0; connIdx < activeConns; connIdx++ {
 		// One key generator + selector per CONNECTION, shared by that
@@ -243,10 +243,18 @@ func (b *Benchmark) runWorkload(phase config.PhaseConfig, clients []client.Bench
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				// A panic in a worker (not an ordinary command error) is a true
+				// worker failure: recover it, record it, and mark the phase ERROR.
+				defer func() {
+					if r := recover(); r != nil {
+						workerPanics.Add(1)
+						b.logger.Printf("worker panic: %v", r)
+					}
+				}()
 				coll := metrics.NewCollector()
 				coll.Start()
 				b.pipelineWorker(c, keyGen, selector, limiter, &remaining, deadline,
-					phase.Completion.IsDurationBased(), coll, &failures)
+					phase.Completion.IsDurationBased(), coll)
 				coll.Stop()
 				merger.Merge(coll)
 			}()
@@ -257,10 +265,12 @@ func (b *Benchmark) runWorkload(phase config.PhaseConfig, clients []client.Bench
 	if b.interrupted.Load() {
 		return StatusInterrupted
 	}
-	if failures.Load() > 0 {
+	// A worker that panicked is a genuine failure of the run.
+	if workerPanics.Load() > 0 {
 		return StatusError
 	}
-	// A phase where nothing succeeded produced no usable data.
+	// Ordinary command errors are recorded, not fatal — matching the reference
+	// engines. A phase is only ERROR if EVERY request failed (no usable data).
 	if merged.TotalRequests() > 0 && merged.TotalRequests() == merged.TotalErrors() {
 		b.logger.Printf("all %d requests failed; reporting phase as ERROR", merged.TotalRequests())
 		return StatusError
@@ -270,9 +280,11 @@ func (b *Benchmark) runWorkload(phase config.PhaseConfig, clients []client.Bench
 
 // pipelineWorker is one in-flight slot on a shared connection. It draws from the
 // shared budget (or runs until the deadline) and records into its own collector.
+// Ordinary command failures are recorded and the loop continues (with backoff on
+// sustained failure); they do not by themselves fail the phase.
 func (b *Benchmark) pipelineWorker(c client.BenchmarkClient, keyGen *KeyGenerator,
 	selector *CommandSelector, limiter *RateLimiter, remaining *atomic.Int64,
-	deadline time.Time, durationBased bool, coll *metrics.Collector, failures *atomic.Int64) {
+	deadline time.Time, durationBased bool, coll *metrics.Collector) {
 
 	consecutiveFailures := 0
 	for {
@@ -297,12 +309,8 @@ func (b *Benchmark) pipelineWorker(c client.BenchmarkClient, keyGen *KeyGenerato
 			continue
 		}
 		// Back off a permanently-failing connection so it cannot spin at full CPU
-		// inflating the error count.
+		// inflating the error count. The error is recorded above regardless.
 		consecutiveFailures++
-		if consecutiveFailures == 1 {
-			// First failure on this slot counts toward phase failure detection.
-			failures.Add(1)
-		}
 		if consecutiveFailures >= failureBackoffAfter {
 			d := time.Duration(consecutiveFailures-failureBackoffAfter+1) * time.Millisecond
 			if d > maxFailureBackoff {

@@ -17,6 +17,7 @@ type DriverConfig struct {
 	Description          string         `json:"description"`
 	DriverID             string         `json:"driver_id"`
 	Mode                 string         `json:"mode"` // standalone | cluster | sentinel
+	CommandTimeoutMs     *int           `json:"command_timeout_ms,omitempty"`
 	TLS                  map[string]any `json:"tls,omitempty"`
 	Auth                 map[string]any `json:"auth,omitempty"`
 	SpecificDriverConfig map[string]any `json:"specific_driver_config,omitempty"`
@@ -59,7 +60,6 @@ type PhaseConfig struct {
 	RpsLimit       int              `json:"rps_limit"`
 	PipelineDepth  int              `json:"pipeline_depth"`
 	WarmupRequests int              `json:"warmup_requests"`
-	CommandTimeout *int             `json:"command_timeout_ms,omitempty"`
 	Completion     CompletionConfig `json:"completion"`
 	Keyspace       KeyspaceConfig   `json:"keyspace"`
 	Commands       []CommandConfig  `json:"commands"`

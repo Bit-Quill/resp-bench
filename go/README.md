@@ -138,3 +138,14 @@ Implement `BenchmarkClient` (and optionally `PipelineAware` / `DetailedClient`),
 register it in `internal/client/factory.go`, and time each call yourself (mirror
 `GoRedisClient.measure`). Keep the `TimedResult` contract identical —
 `Success()` is `Err == nil`, `LatencyMicros` in microseconds.
+
+## Known issues
+
+- **GLIDE OTel init race (upstream, worked around).** `valkey-glide-go` v2.5.3's
+  `GetOtelInstance()` lazily initializes a process-global singleton without
+  synchronization, which every command touches — so concurrent first use races.
+  The Go engine forces that global to initialize once, single-threaded, via a
+  `sync.Once` around the first `Ping` in `GlideClient.Connect` (connections are
+  created serially), after which all concurrent callers only read the settled
+  value. This is why `go test -race` is clean. If GLIDE fixes the singleton, the
+  `glideOtelOnce` workaround in `internal/client/glide.go` can be removed.

@@ -95,11 +95,10 @@ func (c *GoRedisClient) Connect(host string, port int, cfg config.DriverConfig) 
 			opt.Password = p
 		}
 	}
-	if cfg.SpecificDriverConfig != nil {
-		if v, ok := cfg.SpecificDriverConfig["command_timeout_ms"].(float64); ok && v > 0 {
-			opt.ReadTimeout = time.Duration(v) * time.Millisecond
-			opt.WriteTimeout = time.Duration(v) * time.Millisecond
-		}
+	if cfg.CommandTimeoutMs != nil && *cfg.CommandTimeoutMs > 0 {
+		d := time.Duration(*cfg.CommandTimeoutMs) * time.Millisecond
+		opt.ReadTimeout = d
+		opt.WriteTimeout = d
 	}
 
 	c.rdb = redis.NewClient(opt)

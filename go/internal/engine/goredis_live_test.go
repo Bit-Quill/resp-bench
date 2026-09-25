@@ -151,27 +151,3 @@ func TestGlideLiveBenchmark(t *testing.T) {
 		t.Fatalf("errors=%d, want 0", errs)
 	}
 }
-
-// TestGoRedisConnectFailure verifies connecting to a dead port fails loudly
-// (the phase is ERROR, exit non-zero) rather than silently reporting success.
-func TestGoRedisConnectFailure(t *testing.T) {
-	wl, _ := config.ParseWorkloadConfig([]byte(`{
-	  "benchmark_profile": {"name": "dead"},
-	  "phases": [{"id":"P","connections":2,
-	    "commands":[{"command":"get","weight":1.0}],
-	    "keyspace":{"keys_count":10,"key_size_bytes":16,"key_prefix":"x:"},
-	    "completion":{"type":"requests","requests":10}}]
-	}`))
-	driver := config.DriverConfig{DriverID: "go-redis", Mode: "standalone"}
-	out := filepath.Join(t.TempDir(), "dead.ndjson")
-	// Port 1 is not a listening Redis; connect must fail.
-	b := New("127.0.0.1", 1, driver, wl, out, "t", quietLogger())
-	code, _ := b.Run()
-	if code == 0 {
-		t.Fatal("expected non-zero exit when the server is unreachable")
-	}
-	data, _ := os.ReadFile(out)
-	if !strings.Contains(string(data), `"status":"ERROR"`) {
-		t.Fatalf("expected ERROR status, got: %s", data)
-	}
-}

@@ -2,12 +2,24 @@ package client
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/resp-bench/go/internal/config"
 	glide "github.com/valkey-io/valkey-glide/go/v2"
 	glideconfig "github.com/valkey-io/valkey-glide/go/v2/config"
 )
+
+// glideOtelOnce serializes the very first GLIDE command per process.
+//
+// GLIDE v2.5.3's GetOtelInstance() lazily initializes a package-global singleton
+// without synchronization (opentelemetry.go: `if otelInstance == nil { ... }`),
+// which every command execution touches. Concurrent first use — multiple clients
+// or pipeline_depth > 1 — therefore races on that global. We cannot fix the
+// library, but forcing one command to run under a sync.Once makes the global's
+// single write happen single-threaded, after which all concurrent callers only
+// read the already-set value. See go/README.md "Known issues".
+var glideOtelOnce sync.Once
 
 // GlideClient is the Valkey GLIDE Go driver (github.com/valkey-io/valkey-glide/go/v2).
 //
@@ -59,10 +71,8 @@ func (c *GlideClient) Connect(host string, port int, cfg config.DriverConfig) er
 			conf = conf.WithCredentials(glideconfig.NewServerCredentials(user, pass))
 		}
 	}
-	if cfg.SpecificDriverConfig != nil {
-		if v, ok := cfg.SpecificDriverConfig["command_timeout_ms"].(float64); ok && v > 0 {
-			conf = conf.WithRequestTimeout(time.Duration(v) * time.Millisecond)
-		}
+	if cfg.CommandTimeoutMs != nil && *cfg.CommandTimeoutMs > 0 {
+		conf = conf.WithRequestTimeout(time.Duration(*cfg.CommandTimeoutMs) * time.Millisecond)
 	}
 
 	cl, err := glide.NewClient(conf)
@@ -70,6 +80,12 @@ func (c *GlideClient) Connect(host string, port int, cfg config.DriverConfig) er
 		return err
 	}
 	c.client = cl
+
+	// Force GLIDE's racy lazy OTel singleton to initialize once, single-threaded,
+	// before any concurrent command use (warmup goroutines / pipeline_depth slots).
+	glideOtelOnce.Do(func() {
+		_, _ = cl.Ping(c.ctx)
+	})
 	return nil
 }
 
