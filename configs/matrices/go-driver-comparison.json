@@ -1,0 +1,19 @@
+{
+    "description": "Compare Go clients (Valkey GLIDE Go vs go-redis) across client counts",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 5,
+    "dimensions": {
+        "connections": [
+            1,
+            2,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-go.json",
+            "configs/drivers/high-throughput/go-redis.json"
+        ]
+    }
+}

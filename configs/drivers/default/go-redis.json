@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "go-redis (github.com/redis/go-redis) - default configuration",
+    "driver_id": "go-redis",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}
