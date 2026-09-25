@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "Valkey GLIDE Go - default configuration",
+    "driver_id": "valkey-glide-go",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

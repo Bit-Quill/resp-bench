@@ -14,6 +14,7 @@ on:
           - node
           - php
           - python
+          - go
 
 jobs:
   benchmark-java:
@@ -189,6 +190,42 @@ jobs:
 
       - name: Run PHP integration tests (server-free)
         run: cd php && vendor/bin/phpunit --testsuite integration
+
+  test-go:
+    # Server-free Go engine tests plus a live go-redis test against a Valkey
+    # service container. The unit/recording tests need no server; the live test
+    # is gated on VALKEY_HOST and exercises the real go-redis driver path.
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'go' }}
+    runs-on: ubuntu-latest
+    services:
+      valkey:
+        image: valkey/valkey:8
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Go engine
+        run: cd go && go build ./...
+
+      - name: Vet Go engine
+        run: cd go && go vet ./...
+
+      - name: Run Go tests (unit + live go-redis)
+        env:
+          VALKEY_HOST: localhost
+          VALKEY_PORT: 6379
+        run: cd go && go test ./...
 
   benchmark-php:
     if: ${{ inputs.engines == 'all' || inputs.engines == 'php' }}

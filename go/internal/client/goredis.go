@@ -1,0 +1,134 @@
+package client
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+	"github.com/resp-bench/go/internal/config"
+)
+
+// GoRedisClient is the go-redis (github.com/redis/go-redis/v9) driver.
+//
+// Behavior is pinned to match the other engines' one-round-trip-per-request
+// contract (see the Python redis-py driver):
+//   - RESP3 (Protocol: 3)
+//   - retries DISABLED (MaxRetries: -1): a silently retried failure must be
+//     recorded as an error, not as a success with inflated latency.
+//   - a single pooled connection per client (PoolSize: 1), matching the
+//     "one in-flight request per connection" model of the other drivers.
+//   - values kept as raw bytes (no decode overhead).
+type GoRedisClient struct {
+	rdb *redis.Client
+	ctx context.Context
+}
+
+// NewGoRedisClient returns an unconnected go-redis client.
+func NewGoRedisClient() *GoRedisClient {
+	return &GoRedisClient{ctx: context.Background()}
+}
+
+// Connect opens the client and eagerly pings so failures surface here.
+func (c *GoRedisClient) Connect(host string, port int, cfg config.DriverConfig) error {
+	opt := &redis.Options{
+		Addr:       host + ":" + itoa(port),
+		Protocol:   3,  // RESP3, pinned so behavior does not depend on defaults
+		MaxRetries: -1, // disable retries: one round trip per request
+		PoolSize:   1,  // one socket per "connection", like the other drivers
+	}
+
+	if tlsCfg := buildTLSConfig(cfg); tlsCfg != nil {
+		opt.TLSConfig = tlsCfg
+	}
+	if cfg.Auth != nil {
+		if u, ok := cfg.Auth["username"].(string); ok {
+			opt.Username = u
+		}
+		if p, ok := cfg.Auth["password"].(string); ok {
+			opt.Password = p
+		}
+	}
+	if cfg.SpecificDriverConfig != nil {
+		if v, ok := cfg.SpecificDriverConfig["command_timeout_ms"].(float64); ok && v > 0 {
+			opt.ReadTimeout = time.Duration(v) * time.Millisecond
+			opt.WriteTimeout = time.Duration(v) * time.Millisecond
+		}
+	}
+
+	c.rdb = redis.NewClient(opt)
+
+	// Establish the connection eagerly so a bad host/port fails at connect time
+	// rather than being (mis)recorded as per-request errors.
+	if err := c.rdb.Ping(c.ctx).Err(); err != nil {
+		_ = c.rdb.Close()
+		c.rdb = nil
+		return err
+	}
+	return nil
+}
+
+// measure times fn and packages the outcome as a TimedResult.
+func (c *GoRedisClient) measure(fn func() (any, error)) TimedResult {
+	start := time.Now()
+	val, err := fn()
+	lat := time.Since(start).Microseconds()
+	if lat < 1 {
+		lat = 1
+	}
+	return TimedResult{Value: val, LatencyMicros: lat, Err: err}
+}
+
+// Ping executes PING.
+func (c *GoRedisClient) Ping() TimedResult {
+	return c.measure(func() (any, error) { return c.rdb.Ping(c.ctx).Result() })
+}
+
+// Get executes GET. A missing key (redis.Nil) is a successful empty result, not
+// an error — matching the other drivers.
+func (c *GoRedisClient) Get(key string) TimedResult {
+	return c.measure(func() (any, error) {
+		v, err := c.rdb.Get(c.ctx, key).Result()
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return v, err
+	})
+}
+
+// Set executes SET with no expiry.
+func (c *GoRedisClient) Set(key string, value []byte) TimedResult {
+	return c.measure(func() (any, error) { return c.rdb.Set(c.ctx, key, value, 0).Result() })
+}
+
+// Close releases the client.
+func (c *GoRedisClient) Close() error {
+	if c.rdb == nil {
+		return nil
+	}
+	return c.rdb.Close()
+}
+
+// DriverVersion returns the go-redis module version.
+func (c *GoRedisClient) DriverVersion() string { return "go-redis/v9.7.3" }
+
+// SecondaryDriverVersion is unused for go-redis.
+func (c *GoRedisClient) SecondaryDriverVersion() string { return "" }
+
+// buildTLSConfig returns a *tls.Config when the driver config enables TLS, or nil.
+func buildTLSConfig(cfg config.DriverConfig) *tls.Config {
+	if cfg.TLS == nil {
+		return nil
+	}
+	enabled, _ := cfg.TLS["enabled"].(bool)
+	// Presence of a tls block with any cert path also implies TLS.
+	if !enabled && len(cfg.TLS) == 0 {
+		return nil
+	}
+	t := &tls.Config{}
+	if v, ok := cfg.TLS["verify_hostname"].(bool); ok && !v {
+		t.InsecureSkipVerify = true
+	}
+	return t
+}
