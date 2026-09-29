@@ -145,6 +145,46 @@ fn all_failures_report_error() {
 }
 
 #[test]
+fn rps_limit_is_a_global_cap() {
+    // With connections=4 and rps_limit=2000, the WHOLE phase should run at ~2000
+    // rps (not 4x that). 2000 requests at 2000 rps ≈ 1s. A per-connection limiter
+    // bug would finish it in ~0.25s. Allow generous slack for CI timing.
+    use std::time::Instant;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("m.ndjson");
+    let out_str = out.to_str().unwrap();
+
+    let workload = r#"{
+      "schema_version":"1.0",
+      "benchmark_profile":{"name":"t"},
+      "phases":[{
+        "id":"P","connections":4,"rps_limit":2000,"warmup_requests":0,
+        "commands":[{"command":"get","weight":1.0}],
+        "keyspace":{"keys_count":100,"key_size_bytes":16,"key_prefix":"k:","generation_alg":"sequential_int"},
+        "completion":{"type":"requests","requests":2000}
+      }]
+    }"#;
+
+    let driver = parse_driver_config_str(&recording_driver("")).unwrap();
+    let wl = parse_workload_config_str(workload).unwrap();
+    let mut b = Benchmark::new("localhost", 6379, driver, wl, out_str, None);
+
+    let start = Instant::now();
+    b.run().unwrap();
+    let elapsed = start.elapsed();
+
+    let rec = &read_lines(out_str)[0];
+    assert_eq!(rec["totals"]["requests"].as_u64().unwrap(), 2000);
+    // 2000 req / 2000 rps ≈ 1s. A 4x-too-fast bug would finish well under 0.5s.
+    assert!(
+        elapsed.as_millis() >= 700,
+        "phase finished in {:?}; rps_limit not enforced as a global cap",
+        elapsed
+    );
+}
+
+#[test]
 fn duration_based_phase_completes() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("m.ndjson");

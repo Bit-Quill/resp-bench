@@ -58,6 +58,17 @@ impl Default for RedisRsClient {
 
 impl BenchmarkClient for RedisRsClient {
     fn connect(&mut self, host: &str, port: u16, config: &DriverConfig) -> Result<(), String> {
+        // This driver uses a standalone client + r2d2 pool. Cluster mode would
+        // need redis-rs's separate ClusterClient (the `cluster` feature), which
+        // r2d2 does not pool the same way, so reject it loudly rather than
+        // silently connecting standalone against a cluster. Use the
+        // `valkey-glide-rust` driver for cluster benchmarks.
+        if config.is_cluster() {
+            return Err(
+                "redis-rs driver does not support cluster mode; use valkey-glide-rust".to_string(),
+            );
+        }
+
         // Build a redis:// URL. RESP3 is requested so the driver matches GLIDE's
         // negotiated protocol; auth and TLS map into the URL scheme/userinfo.
         let scheme = if config.tls_enabled() {

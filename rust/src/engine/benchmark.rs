@@ -242,6 +242,11 @@ impl Benchmark {
         // Shared atomic budget: fetch_sub returns the value BEFORE decrement, so
         // a return of <= 0 means the budget is already exhausted (exact target).
         let remaining = Arc::new(AtomicI64::new(target_requests));
+        // ONE rate limiter shared across the whole phase, so rps_limit is a global
+        // cap on the phase's request rate (matching the Java/Python/Node engines).
+        // A per-connection limiter at the full rate would multiply the effective
+        // rate by `connections`.
+        let rps_limiter = Arc::new(RateLimiter::create(phase.rps_limit));
         let merged = Arc::new(Mutex::new(MetricsCollector::new()));
         let worker_panics = Arc::new(AtomicI64::new(0));
         let interrupted = &self.interrupted;
@@ -256,15 +261,13 @@ impl Benchmark {
         thread::scope(|scope| {
             for (idx, client) in clients.iter().enumerate() {
                 // One key generator + selector per CONNECTION, shared by its depth
-                // workers. One rate limiter per connection, shared across its
-                // depth slots, so the connection's rps share is not multiplied.
+                // workers.
                 let selector = Arc::new(CommandSelector::new(commands.to_vec()));
-                let conn_rps = Arc::new(RateLimiter::create(phase.rps_limit));
                 let client_ref: &dyn BenchmarkClient = client.as_ref();
 
                 for _ in 0..depth {
                     let remaining = remaining.clone();
-                    let conn_rps = conn_rps.clone();
+                    let rps_limiter = rps_limiter.clone();
                     let merged = merged.clone();
                     let worker_panics = worker_panics.clone();
                     let selector = selector.clone();
@@ -283,7 +286,7 @@ impl Benchmark {
                                     client_ref,
                                     &mut key_gen,
                                     &selector,
-                                    &conn_rps,
+                                    &rps_limiter,
                                     &remaining,
                                     &interrupted,
                                     duration_based,
