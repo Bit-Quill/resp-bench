@@ -1,0 +1,5 @@
+# The Valkey GLIDE Rust client declares rust-version 1.94.1 (its AWS SDK deps
+# require it). Pin the engine to that toolchain so builds are reproducible and
+# match CI.
+[toolchain]
+channel = "1.94.1"

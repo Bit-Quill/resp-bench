@@ -82,6 +82,9 @@ DRIVER_LANGUAGE_MAP = {
     "redis-py": "python",
     "valkey-glide-python": "python",
     "aioredis": "python",
+    # Rust drivers
+    "valkey-glide-rust": "rust",
+    "redis-rs": "rust",
 }
 
 
@@ -129,7 +132,7 @@ def parse_args():
         # Keep in sync with the values in DRIVER_LANGUAGE_MAP — argparse rejects
         # anything not listed here, so a language added to the map alone fails at
         # the CLI rather than silently producing empty graphs.
-        choices=["java", "ruby", "csharp", "node", "python", "php"],
+        choices=["java", "ruby", "csharp", "node", "python", "php", "rust"],
         help="Filter results by language (only include drivers for this language)",
     )
     parser.add_argument(

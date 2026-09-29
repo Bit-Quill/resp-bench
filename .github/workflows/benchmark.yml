@@ -14,6 +14,7 @@ on:
           - node
           - php
           - python
+          - rust
 
 jobs:
   benchmark-java:
@@ -426,8 +427,106 @@ jobs:
           path: ${{ steps.names.outputs.result_file }}
           retention-days: 30
 
+  test-rust:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'rust' }}
+    runs-on: ubuntu-latest
+
+    services:
+      valkey:
+        image: valkey/valkey:8
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential protobuf-compiler
+
+      # rust/rust-toolchain.toml pins GLIDE's MSRV; rustup honors it.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Unit + integration tests (server-free)
+        run: cd rust && cargo test --release
+
+      - name: Live GLIDE tests
+        env:
+          VALKEY_HOST: localhost
+          VALKEY_PORT: 6379
+        run: cd rust && cargo test --release -- --ignored
+
+  benchmark-rust:
+    if: ${{ inputs.engines == 'all' || inputs.engines == 'rust' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        driver:
+          - configs/drivers/default/valkey-glide-rust.json
+          - configs/drivers/default/redis-rs.json
+        workload:
+          - configs/workloads/reference/basic-standalone-single-client-1M-reqs.json
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential protobuf-compiler
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust engine
+        run: make rust-build
+
+      - name: Start Valkey server
+        run: |
+          make server-standalone-start
+          sleep 2
+          work/valkey/bin/valkey-cli ping
+          work/valkey/bin/valkey-cli CONFIG GET save
+
+      - name: Extract names for result file
+        id: names
+        run: |
+          DRIVER_NAME=$(basename ${{ matrix.driver }} .json)
+          WORKLOAD_NAME=$(basename ${{ matrix.workload }} .json)
+          echo "driver_name=$DRIVER_NAME" >> $GITHUB_OUTPUT
+          echo "workload_name=$WORKLOAD_NAME" >> $GITHUB_OUTPUT
+          echo "result_file=results/github-runner/reference/${DRIVER_NAME}-${WORKLOAD_NAME}.ndjson" >> $GITHUB_OUTPUT
+
+      - name: Run benchmark
+        run: |
+          mkdir -p results/github-runner/reference
+          make rust-run \
+            SERVER=localhost:6379 \
+            DRIVER=${{ matrix.driver }} \
+            WORKLOAD=${{ matrix.workload }} \
+            METRICS_OUTPUT=${{ steps.names.outputs.result_file }}
+
+      - name: Stop Valkey server
+        if: always()
+        run: make server-standalone-stop || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-rust-${{ steps.names.outputs.driver_name }}-${{ steps.names.outputs.workload_name }}
+          path: ${{ steps.names.outputs.result_file }}
+          retention-days: 30
+
   generate-graphs:
-    needs: [benchmark-java, benchmark-ruby, benchmark-php, benchmark-node, benchmark-python]
+    needs: [benchmark-java, benchmark-ruby, benchmark-php, benchmark-node, benchmark-python, benchmark-rust]
     # A skipped `needs` job would skip this one by default, so an engine-scoped
     # run would produce no graphs at all. Individual graph steps are gated on the
     # same input instead.

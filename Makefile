@@ -37,6 +37,7 @@ WORK_DIR=$(shell pwd)/work
 	php-build php-test php-integration-test php-test-live php-run php-clean php-info \
 	node-build node-deps node-test node-unit-test node-integration-test \
 	node-run node-clean node-info \
+	rust-build rust-test rust-run rust-clean rust-info \
 	config-editor-build config-editor-dev
 
 # ============================================================================
@@ -352,6 +353,32 @@ python-clean:
 	# inside itself breaks python-build/python-run until it is recreated by hand.
 	cd python && rm -rf .pytest_cache dist build *.egg-info src/*.egg-info
 	find python/src python/tests -name __pycache__ -type d -prune -exec rm -rf {} +
+
+# ============================================================================
+# Rust Engine
+# ============================================================================
+# Builds in release mode by default (the benchmark should not measure a debug
+# build). The rust/ crate pins its toolchain via rust-toolchain.toml (GLIDE's
+# MSRV), so cargo selects the right compiler automatically.
+
+rust-build:
+	cd rust && cargo build --release
+
+rust-test:
+	cd rust && cargo test
+
+rust-run: rust-build
+	cd rust && ./target/release/resp-bench \
+		--server $(SERVER) \
+		--driver $(abspath $(DRIVER)) \
+		--workload $(abspath $(WORKLOAD)) \
+		--metrics $(abspath $(METRICS_OUTPUT))
+
+rust-info: rust-build
+	cd rust && ./target/release/resp-bench --info
+
+rust-clean:
+	cd rust && cargo clean
 
 # ============================================================================
 # Ruby Engine

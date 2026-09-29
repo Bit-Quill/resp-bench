@@ -1,0 +1,38 @@
+[package]
+name = "resp-bench"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+license = "Apache-2.0"
+description = "Rust benchmark engine for resp-bench (RESP/Valkey), at parity with the Java/Python/Go/etc. engines."
+publish = false
+
+[[bin]]
+name = "resp-bench"
+path = "src/main.rs"
+
+[lib]
+name = "resp_bench"
+path = "src/lib.rs"
+
+[dependencies]
+# The Valkey GLIDE native Rust client (blocking `sync` layer). Sourced from the
+# local checkout; APIs mirror redis-rs. Pin by path until it is published.
+glide = { package = "glide-rust", path = "../../valkey-glide/rust", default-features = true }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# HdrHistogram with the V2-deflate serializer, which emits the same base64
+# compressed payload Java/Ruby/Python decode (cross-engine analysis needs
+# decodability, not byte-identity).
+hdrhistogram = "7.5"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+# The published redis-rs client, as a second (pooling) driver alongside GLIDE.
+# Aliased to avoid confusion with the vendored fork GLIDE builds on internally.
+redis = { version = "0.25", features = ["r2d2"] }
+r2d2 = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,6 @@
+{
+  "schema_version": "1.0",
+  "description": "redis-rs (published redis crate) with an r2d2 connection pool.",
+  "driver_id": "redis-rs",
+  "mode": "standalone"
+}

@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "description": "Valkey GLIDE native Rust client tuned for high throughput.",
+  "driver_id": "valkey-glide-rust",
+  "mode": "standalone",
+  "command_timeout_ms": 5000
+}

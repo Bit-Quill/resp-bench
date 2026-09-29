@@ -134,6 +134,9 @@ DRIVER_ENGINE_MAP = {
     # Python drivers
     "redis-py": "python",
     "valkey-glide-python": "python",
+    # Rust drivers
+    "valkey-glide-rust": "rust",
+    "redis-rs": "rust",
     # Recording (default to java)
     "recording": "java",
 }
