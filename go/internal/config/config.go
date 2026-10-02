@@ -59,7 +59,7 @@ type PhaseConfig struct {
 	CpsLimit       int              `json:"cps_limit"`
 	RpsLimit       int              `json:"rps_limit"`
 	PipelineDepth  int              `json:"pipeline_depth"`
-	WarmupRequests int              `json:"warmup_requests"`
+	WarmupRequests *int             `json:"warmup_requests"`
 	Completion     CompletionConfig `json:"completion"`
 	Keyspace       KeyspaceConfig   `json:"keyspace"`
 	Commands       []CommandConfig  `json:"commands"`
@@ -70,6 +70,17 @@ func (p PhaseConfig) HasRpsLimit() bool { return p.RpsLimit > 0 }
 
 // HasCpsLimit reports whether a positive cps limit is configured.
 func (p PhaseConfig) HasCpsLimit() bool { return p.CpsLimit > 0 }
+
+// EffectiveWarmupRequests returns the configured warmup request count, applying
+// the default of 1 only when the key is absent. An explicit 0 disables warmup,
+// matching the schema ("minimum: 0, default: 1") and the other engines, which
+// apply the default on absence only.
+func (p PhaseConfig) EffectiveWarmupRequests() int {
+	if p.WarmupRequests == nil {
+		return 1
+	}
+	return *p.WarmupRequests
+}
 
 // EffectivePipelineDepth defaults to 1 when unset/invalid.
 func (p PhaseConfig) EffectivePipelineDepth() int {
@@ -181,7 +192,8 @@ func ParseWorkloadConfig(data []byte) (WorkloadConfig, error) {
 	for i := range w.Phases {
 		p := &w.Phases[i]
 		// Defaults matching the reference engines: rps/cps default to -1 (unlimited),
-		// pipeline_depth to 1, warmup_requests to 1.
+		// pipeline_depth to 1. warmup_requests defaults to 1 only when absent (an
+		// explicit 0 disables warmup), so it is handled via EffectiveWarmupRequests.
 		if p.CpsLimit == 0 {
 			p.CpsLimit = -1
 		}
@@ -190,9 +202,6 @@ func ParseWorkloadConfig(data []byte) (WorkloadConfig, error) {
 		}
 		if p.PipelineDepth == 0 {
 			p.PipelineDepth = 1
-		}
-		if p.WarmupRequests == 0 {
-			p.WarmupRequests = 1
 		}
 	}
 	return w, nil

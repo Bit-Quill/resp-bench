@@ -102,6 +102,9 @@ func (b *Benchmark) validateKnobs() error {
 		if p.PipelineDepth < 0 {
 			return fmt.Errorf("phase %s: pipeline_depth must be >= 1", p.ID)
 		}
+		if len(p.Commands) == 0 {
+			return fmt.Errorf("phase %s: commands must not be empty", p.ID)
+		}
 	}
 	return nil
 }
@@ -127,9 +130,9 @@ func (b *Benchmark) executePhase(phase config.PhaseConfig) (string, error) {
 		phase.ID, phase.Description, phase.Connections, depth)
 
 	merged := metrics.NewCollector()
-	status, socketsPerClient, err := b.runPhase(phase, merged)
+	status, activeConns, socketsPerClient, err := b.runPhase(phase, merged)
 
-	if werr := b.writer.WritePhaseResults(phase.ID, status, phase.Connections, depth, socketsPerClient, merged); werr != nil {
+	if werr := b.writer.WritePhaseResults(phase.ID, status, activeConns, depth, socketsPerClient, merged); werr != nil {
 		return status, fmt.Errorf("write phase results: %w", werr)
 	}
 
@@ -144,9 +147,12 @@ func (b *Benchmark) executePhase(phase config.PhaseConfig) (string, error) {
 }
 
 // runPhase creates the connections, warms up, runs the workload, and merges the
-// per-worker collectors. It returns the phase status and the sockets-per-client
-// count reported by the driver.
-func (b *Benchmark) runPhase(phase config.PhaseConfig, merged *metrics.Collector) (string, int, error) {
+// per-worker collectors. It returns the phase status, the number of connections
+// that actually did work (activeConns, which can be below phase.Connections when
+// an rps limit is lower than the connection count), and the sockets-per-client
+// count reported by the driver. Reporting activeConns keeps the row's
+// connections/total_sockets honest with the sockets actually opened.
+func (b *Benchmark) runPhase(phase config.PhaseConfig, merged *metrics.Collector) (string, int, int, error) {
 	depth := phase.EffectivePipelineDepth()
 	workerCount := phase.Connections
 	if workerCount < 1 {
@@ -172,7 +178,7 @@ func (b *Benchmark) runPhase(phase config.PhaseConfig, merged *metrics.Collector
 			// is not a null-timestamp schema violation.
 			merged.Start()
 			merged.Stop()
-			return StatusError, 1, fmt.Errorf("create connection %d: %w", i, err)
+			return StatusError, activeConns, 1, fmt.Errorf("create connection %d: %w", i, err)
 		}
 		clients = append(clients, c)
 	}
@@ -184,15 +190,15 @@ func (b *Benchmark) runPhase(phase config.PhaseConfig, merged *metrics.Collector
 	}
 
 	// --- warmup (before the clock): exactly warmup_requests PINGs per client --
-	if err := b.runWarmup(clients, phase.WarmupRequests); err != nil {
+	if err := b.runWarmup(clients, phase.EffectiveWarmupRequests()); err != nil {
 		merged.Start()
 		merged.Stop()
-		return StatusError, socketsPerClient, err
+		return StatusError, activeConns, socketsPerClient, err
 	}
 
 	// --- workload -----------------------------------------------------------
 	status := b.runWorkload(phase, clients, activeConns, workerCount, merged)
-	return status, socketsPerClient, nil
+	return status, activeConns, socketsPerClient, nil
 }
 
 // runWorkload spawns depth worker goroutines per connection, all sharing a
@@ -243,6 +249,17 @@ func (b *Benchmark) runWorkload(phase config.PhaseConfig, clients []client.Bench
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				coll := metrics.NewCollector()
+				coll.Start()
+				// Close the collector's window and merge it even if the worker
+				// panics, so a panicking worker still contributes a valid
+				// (non-null) window rather than leaving the phase with a
+				// null-timestamp row. Registered before the recover defer so it
+				// runs after recovery, with the window intact.
+				defer func() {
+					coll.Stop()
+					merger.Merge(coll)
+				}()
 				// A panic in a worker (not an ordinary command error) is a true
 				// worker failure: recover it, record it, and mark the phase ERROR.
 				defer func() {
@@ -251,12 +268,8 @@ func (b *Benchmark) runWorkload(phase config.PhaseConfig, clients []client.Bench
 						b.logger.Printf("worker panic: %v", r)
 					}
 				}()
-				coll := metrics.NewCollector()
-				coll.Start()
 				b.pipelineWorker(c, keyGen, selector, limiter, &remaining, deadline,
 					phase.Completion.IsDurationBased(), coll)
-				coll.Stop()
-				merger.Merge(coll)
 			}()
 		}
 	}

@@ -3,7 +3,10 @@ package client
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -84,7 +87,9 @@ func (c *GoRedisClient) Connect(host string, port int, cfg config.DriverConfig) 
 		PoolSize:   c.maxInFlight, // one socket per in-flight slot (pipeline_depth)
 	}
 
-	if tlsCfg := buildTLSConfig(cfg); tlsCfg != nil {
+	if tlsCfg, err := buildTLSConfig(cfg); err != nil {
+		return err
+	} else if tlsCfg != nil {
 		opt.TLSConfig = tlsCfg
 	}
 	if cfg.Auth != nil {
@@ -160,19 +165,42 @@ func (c *GoRedisClient) DriverVersion() string { return "go-redis/v9.7.3" }
 // SecondaryDriverVersion is unused for go-redis.
 func (c *GoRedisClient) SecondaryDriverVersion() string { return "" }
 
-// buildTLSConfig returns a *tls.Config when the driver config enables TLS, or nil.
-func buildTLSConfig(cfg config.DriverConfig) *tls.Config {
-	if cfg.TLS == nil {
-		return nil
-	}
-	enabled, _ := cfg.TLS["enabled"].(bool)
-	// Presence of a tls block with any cert path also implies TLS.
-	if !enabled && len(cfg.TLS) == 0 {
-		return nil
+// buildTLSConfig returns a *tls.Config when the driver config enables TLS, or
+// (nil, nil) when TLS is off. Cert paths (ca_path/cert_path/key_path) are wired
+// into RootCAs/Certificates, matching redis-py which honours all three.
+func buildTLSConfig(cfg config.DriverConfig) (*tls.Config, error) {
+	if !tlsEnabled(cfg) {
+		return nil, nil
 	}
 	t := &tls.Config{}
 	if v, ok := cfg.TLS["verify_hostname"].(bool); ok && !v {
 		t.InsecureSkipVerify = true
 	}
-	return t
+
+	if caPath, ok := cfg.TLS["ca_path"].(string); ok && caPath != "" {
+		pem, err := os.ReadFile(caPath)
+		if err != nil {
+			return nil, fmt.Errorf("tls: read ca_path %q: %w", caPath, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("tls: ca_path %q contains no valid certificates", caPath)
+		}
+		t.RootCAs = pool
+	}
+
+	certPath, _ := cfg.TLS["cert_path"].(string)
+	keyPath, _ := cfg.TLS["key_path"].(string)
+	switch {
+	case certPath != "" && keyPath != "":
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("tls: load cert_path/key_path: %w", err)
+		}
+		t.Certificates = []tls.Certificate{cert}
+	case certPath != "" || keyPath != "":
+		return nil, fmt.Errorf("tls: cert_path and key_path must be set together")
+	}
+
+	return t, nil
 }

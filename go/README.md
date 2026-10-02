@@ -106,6 +106,8 @@ Parity traps this engine handles (see `docs/ADDING_LANGUAGE.md`):
 - **Shared request budget** and **rate-limit split** across active workers with
   the remainder distributed; a rps limit below the connection count activates
   only `rps_limit` workers instead of flooring each to 1 (which would overshoot).
+  The phase row then reports that active connection count (and a `total_sockets`
+  derived from it), so `connections` always matches the sockets actually opened.
 - **pipeline_depth**: honored — `depth` worker goroutines per connection share
   one key generator, selector, and rate limiter, so raising the depth changes
   concurrency without changing the key stream. A pooling driver (go-redis) bounds
@@ -113,7 +115,14 @@ Parity traps this engine handles (see `docs/ADDING_LANGUAGE.md`):
   output records `pipeline_depth`, `sockets_per_client`, and `total_sockets`.
 - **cps_limit**: honored — a leaky-bucket limiter throttles connection creation.
 - **warmup**: exactly `warmup_requests` PINGs **per client**, before the clock,
-  and a failed warmup PING fails the phase fast.
+  and a failed warmup PING fails the phase fast. The default of 1 is applied only
+  when the key is absent; an explicit `0` disables warmup (matching the schema's
+  "0 to disable" and the other engines).
+- **TLS**: on only for an explicit `tls.enabled: true` (an empty block or one
+  without `enabled` is off, matching GLIDE and the reference engines). When on,
+  `ca_path` loads into the root pool and `cert_path`/`key_path` (which must be set
+  together) load a client certificate; an unreadable or partial config is a hard
+  error rather than silently ignored.
 - **Statuses**: `COMPLETED` / `ERROR` / `INTERRUPTED` (SIGINT/SIGTERM stop the
   current phase gracefully). Anything short of `COMPLETED` yields a non-zero exit.
 - **Fail-loud & robust**: a worker failure marks the phase `ERROR`; a phase where

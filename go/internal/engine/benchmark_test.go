@@ -232,6 +232,64 @@ func TestInterruptedStatus(t *testing.T) {
 	}
 }
 
+// TestRpsLimitBelowConnections: when rps_limit < connections only rps_limit
+// connections are opened, and the phase row must report that active count (and
+// a total_sockets derived from it), not the configured connections. Downstream
+// tooling uses `connections` as the x-axis, so it must match sockets opened.
+func TestRpsLimitBelowConnections(t *testing.T) {
+	wl, err := config.ParseWorkloadConfig([]byte(`{
+	  "benchmark_profile": {"name": "RPS"},
+	  "phases": [{"id":"P","connections":8,"rps_limit":2,
+	    "commands":[{"command":"get","weight":1.0}],
+	    "keyspace":{"keys_count":50,"key_size_bytes":16,"key_prefix":"r:","generation_alg":"sequential_int"},
+	    "completion":{"type":"requests","requests":10}}]
+	}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "rps.ndjson")
+	b := New("localhost", 6379, recordingDriver(), wl, out, "t", quietLogger())
+	code, err := b.Run()
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	var rec map[string]any
+	data, _ := os.ReadFile(out)
+	_ = json.Unmarshal([]byte(strings.TrimSpace(string(data))), &rec)
+	phase := rec["phase"].(map[string]any)
+	if got := int(phase["connections"].(float64)); got != 2 {
+		t.Fatalf("connections reported=%d, want 2 (active count), not the configured 8", got)
+	}
+	spc := int(phase["sockets_per_client"].(float64))
+	if got := int(phase["total_sockets"].(float64)); got != 2*spc {
+		t.Fatalf("total_sockets=%d, want %d (active connections x sockets_per_client)", got, 2*spc)
+	}
+}
+
+// TestEmptyCommandsRejected: a phase with an empty commands array is a config
+// error (non-zero exit), not a worker panic with a null-timestamp row.
+func TestEmptyCommandsRejected(t *testing.T) {
+	wl, err := config.ParseWorkloadConfig([]byte(`{
+	  "benchmark_profile": {"name": "EMPTY"},
+	  "phases": [{"id":"P","connections":1,
+	    "commands":[],
+	    "keyspace":{"keys_count":50,"key_size_bytes":16,"key_prefix":"e:","generation_alg":"sequential_int"},
+	    "completion":{"type":"requests","requests":10}}]
+	}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "empty.ndjson")
+	b := New("localhost", 6379, recordingDriver(), wl, out, "t", quietLogger())
+	code, _ := b.Run()
+	if code == 0 {
+		t.Fatal("expected non-zero exit for an empty commands array")
+	}
+}
+
 // --- tiny helpers to avoid importing strconv/sort in the test ---
 
 func itoa(n int) string {
