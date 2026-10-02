@@ -372,7 +372,8 @@ rust-run: rust-build
 		--server $(SERVER) \
 		--driver $(abspath $(DRIVER)) \
 		--workload $(abspath $(WORKLOAD)) \
-		--metrics $(abspath $(METRICS_OUTPUT))
+		--metrics $(abspath $(METRICS_OUTPUT)) \
+		$(if $(COMMIT_ID),--commit-id $(COMMIT_ID),)
 
 rust-info: rust-build
 	cd rust && ./target/release/resp-bench --info

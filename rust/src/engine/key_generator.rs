@@ -142,4 +142,107 @@ mod tests {
         let mut g = KeyGenerator::with_seed(&c, 0, SharedCounter::new());
         assert_eq!(g.next_key(), "p:00000000000360");
     }
+
+    #[test]
+    fn shared_uniform_rand_generator_does_not_shrink_with_concurrency() {
+        // Regression: one KeyGenerator per CONNECTION, shared by its depth
+        // workers. The depth workers must draw from a SINGLE uniform_rand
+        // sequence, so the set of keys a run touches is a function of the
+        // request count, not of pipeline_depth. (The old code built one
+        // generator per worker with the same seed, so every worker replayed the
+        // same sequence and the keyspace shrank as depth rose.)
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let c = cfg(10_000, "k:", "uniform_rand", Some(0));
+        let total_requests = 4000usize;
+
+        // One shared generator, drawn by `depth` threads under a lock — exactly
+        // what the engine does for a connection's depth workers.
+        let draw = |depth: usize| -> std::collections::HashSet<String> {
+            let gen = Arc::new(Mutex::new(KeyGenerator::with_seed(
+                &c,
+                0,
+                SharedCounter::new(),
+            )));
+            let out = Arc::new(Mutex::new(Vec::new()));
+            thread::scope(|s| {
+                for _ in 0..depth {
+                    let gen = gen.clone();
+                    let out = out.clone();
+                    s.spawn(move || loop {
+                        let mut g = gen.lock().unwrap();
+                        let mut sink = out.lock().unwrap();
+                        if sink.len() >= total_requests {
+                            return;
+                        }
+                        sink.push(g.next_key());
+                    });
+                }
+            });
+            let result = out
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>();
+            result
+        };
+
+        // The number of DISTINCT keys from a shared sequence is independent of
+        // how many workers share it: depth 1 and depth 8 see the same multiset
+        // (same first `total_requests` draws), so the distinct count matches.
+        let d1 = draw(1);
+        let d8 = draw(8);
+        assert_eq!(
+            d1.len(),
+            d8.len(),
+            "distinct keys shrank with concurrency: depth1={} depth8={}",
+            d1.len(),
+            d8.len()
+        );
+        assert_eq!(
+            d1, d8,
+            "shared generator produced a different key set at depth 8"
+        );
+    }
+
+    #[test]
+    fn shared_sequential_generator_covers_full_range_without_holes() {
+        // With a shared counter, `total_requests == keys_count` must touch every
+        // key exactly once regardless of how many workers draw concurrently.
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let keys_count = 2000u64;
+        let c = cfg(keys_count, "k:", "sequential_int", None);
+        let gen = Arc::new(Mutex::new(KeyGenerator::with_seed(
+            &c,
+            0,
+            SharedCounter::new(),
+        )));
+        let out = Arc::new(Mutex::new(Vec::new()));
+        thread::scope(|s| {
+            for _ in 0..8 {
+                let gen = gen.clone();
+                let out = out.clone();
+                s.spawn(move || loop {
+                    let mut g = gen.lock().unwrap();
+                    let mut sink = out.lock().unwrap();
+                    if sink.len() as u64 >= keys_count {
+                        return;
+                    }
+                    sink.push(g.next_key());
+                });
+            }
+        });
+        let distinct: std::collections::HashSet<_> = out.lock().unwrap().iter().cloned().collect();
+        assert_eq!(
+            distinct.len() as u64,
+            keys_count,
+            "sequential coverage had holes: {} distinct of {}",
+            distinct.len(),
+            keys_count
+        );
+    }
 }

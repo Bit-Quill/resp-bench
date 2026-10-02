@@ -439,8 +439,21 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # The Rust engine depends on the valkey-glide Rust client by path at
+      # ../../valkey-glide/rust (sibling of this repo), until it is published to
+      # crates.io. Check it out beside the workspace at a pinned commit so the
+      # build is reproducible. ${{ github.workspace }} is .../resp-bench, so its
+      # parent is where the path dep resolves.
+      - name: Check out valkey-glide (GLIDE Rust client)
+        uses: actions/checkout@v4
         with:
-          submodules: recursive
+          repository: valkey-io/valkey-glide
+          ref: 86e349014bc8358b822f8b8fb703a509b3ae9af7
+          path: valkey-glide-src
+
+      - name: Place valkey-glide beside the workspace
+        run: mv valkey-glide-src "$(dirname "$GITHUB_WORKSPACE")/valkey-glide"
 
       - name: Install build dependencies
         run: |
@@ -475,8 +488,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # See test-rust: the GLIDE Rust client is a sibling path dep until it is
+      # published. Check it out at the same pinned commit beside the workspace.
+      - name: Check out valkey-glide (GLIDE Rust client)
+        uses: actions/checkout@v4
         with:
-          submodules: recursive
+          repository: valkey-io/valkey-glide
+          ref: 86e349014bc8358b822f8b8fb703a509b3ae9af7
+          path: valkey-glide-src
+
+      - name: Place valkey-glide beside the workspace
+        run: mv valkey-glide-src "$(dirname "$GITHUB_WORKSPACE")/valkey-glide"
 
       - name: Install build dependencies
         run: |
@@ -512,7 +535,8 @@ jobs:
             SERVER=localhost:6379 \
             DRIVER=${{ matrix.driver }} \
             WORKLOAD=${{ matrix.workload }} \
-            METRICS_OUTPUT=${{ steps.names.outputs.result_file }}
+            METRICS_OUTPUT=${{ steps.names.outputs.result_file }} \
+            COMMIT_ID=${{ github.sha }}
 
       - name: Stop Valkey server
         if: always()

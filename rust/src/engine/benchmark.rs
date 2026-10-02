@@ -21,7 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::client::{create_and_connect, BenchmarkClient, ClientError};
-use crate::command::{create_all, Command};
+use crate::command::{consumes_key, create_all, Command};
 use crate::config::{DriverConfig, PhaseConfig, WorkloadConfig};
 use crate::metrics::{build_metadata, Metadata, MetricsCollector, NdjsonWriter};
 
@@ -94,6 +94,14 @@ impl Benchmark {
         let phases = self.workload_config.phases.clone();
         for phase in &phases {
             self.execute_phase(phase)?;
+            // A signal stops the current phase gracefully (handled inside
+            // execute_phase, which reports INTERRUPTED) and skips the rest: there
+            // is no value in opening connections and warming up a phase the user
+            // asked to stop.
+            if self.interrupted.load(Ordering::Relaxed) {
+                log::warn("Interrupted; skipping remaining phases");
+                break;
+            }
         }
         log::info("Benchmark completed");
         Ok(())
@@ -149,6 +157,9 @@ impl Benchmark {
                             collector.start();
                             status = self.run_workload(phase, &clients, &commands, &mut collector);
                             collector.stop();
+                        } else if self.interrupted.load(Ordering::Relaxed) {
+                            log::warn(&format!("phase {}: interrupted during warmup", phase.id));
+                            status = STATUS_INTERRUPTED;
                         } else {
                             log::error(&format!("phase {}: warmup failed", phase.id));
                         }
@@ -157,7 +168,14 @@ impl Benchmark {
                 }
                 self.close_clients(clients);
             }
-            Ok(_) => log::error(&format!("phase {}: no connections created", phase.id)),
+            Ok(_) => {
+                if self.interrupted.load(Ordering::Relaxed) {
+                    log::warn(&format!("phase {}: interrupted during setup", phase.id));
+                    status = STATUS_INTERRUPTED;
+                } else {
+                    log::error(&format!("phase {}: no connections created", phase.id));
+                }
+            }
             Err(ClientError(e)) => log::error(&format!(
                 "phase {}: failed to create clients: {e}",
                 phase.id
@@ -202,6 +220,10 @@ impl Benchmark {
 
         let mut clients = Vec::with_capacity(phase.connections as usize);
         for _ in 0..phase.connections {
+            // Stop opening connections if a signal arrived mid-setup.
+            if self.interrupted.load(Ordering::Relaxed) {
+                break;
+            }
             acquire(&cps_limiter);
             let client = create_and_connect(&self.host, self.port, &self.driver_config, depth)?;
             clients.push(client);
@@ -211,11 +233,14 @@ impl Benchmark {
     }
 
     /// Exactly `warmup_requests` PINGs per client (not multiplied by depth).
-    /// Returns false on the first PING failure.
+    /// Returns false on the first PING failure or if interrupted.
     fn warmup(&self, clients: &[Box<dyn BenchmarkClient>], warmup_requests: u32) -> bool {
         log::info(&format!("Warmup: {warmup_requests} PINGs per client..."));
         for client in clients {
             for _ in 0..warmup_requests {
+                if self.interrupted.load(Ordering::Relaxed) {
+                    return false;
+                }
                 if !client.ping().success {
                     return false;
                 }
@@ -261,8 +286,17 @@ impl Benchmark {
         thread::scope(|scope| {
             for (idx, client) in clients.iter().enumerate() {
                 // One key generator + selector per CONNECTION, shared by its depth
-                // workers.
+                // workers. Sharing (rather than one-per-worker) keeps the key
+                // stream a function of the connection, not of pipeline_depth: the
+                // depth workers collectively draw from a single `uniform_rand`
+                // sequence / sequential counter, so the keyspace a run touches
+                // does not shrink as depth rises (matching Java/Python).
                 let selector = Arc::new(CommandSelector::new(commands.to_vec()));
+                let key_gen = Arc::new(Mutex::new(KeyGenerator::with_seed(
+                    &phase.keyspace,
+                    seed_base + idx as i64,
+                    shared_counter.clone(),
+                )));
                 let client_ref: &dyn BenchmarkClient = client.as_ref();
 
                 for _ in 0..depth {
@@ -271,20 +305,17 @@ impl Benchmark {
                     let merged = merged.clone();
                     let worker_panics = worker_panics.clone();
                     let selector = selector.clone();
-                    let counter = shared_counter.clone();
+                    let key_gen = key_gen.clone();
                     let interrupted = interrupted.clone();
-                    let keyspace = &phase.keyspace;
 
                     scope.spawn(move || {
-                        let mut key_gen =
-                            KeyGenerator::with_seed(keyspace, seed_base + idx as i64, counter);
                         let outcome =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 let mut local = MetricsCollector::new();
                                 local.start();
                                 Self::worker_loop(
                                     client_ref,
-                                    &mut key_gen,
+                                    &key_gen,
                                     &selector,
                                     &rps_limiter,
                                     &remaining,
@@ -341,7 +372,7 @@ impl Benchmark {
     #[allow(clippy::too_many_arguments)]
     fn worker_loop(
         client: &dyn BenchmarkClient,
-        key_gen: &mut KeyGenerator,
+        key_gen: &Mutex<KeyGenerator>,
         selector: &CommandSelector,
         rps_limiter: &Option<RateLimiter>,
         remaining: &AtomicI64,
@@ -365,7 +396,14 @@ impl Benchmark {
 
             acquire(rps_limiter);
             let command = selector.select();
-            let key = key_gen.next_key();
+            // PING consumes no key (matching the Java reference), so advancing
+            // the generator for it would shift every later key and leave holes in
+            // the keyspace. Only draw a key for key-consuming commands.
+            let key = if consumes_key(command) {
+                key_gen.lock().unwrap().next_key()
+            } else {
+                String::new()
+            };
             let result = command.execute(client, &key);
             let success = result.success;
             collector.record(&result);

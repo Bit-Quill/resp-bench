@@ -61,3 +61,91 @@ pub fn load_workload_config(path: impl AsRef<Path>) -> Result<WorkloadConfig, Co
     let data = std::fs::read_to_string(path)?;
     parse_workload_config_str(&data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A valid workload with the given phase body spliced in, so each test varies
+    // exactly one field.
+    fn workload_with(phase: &str) -> String {
+        format!(
+            r#"{{"schema_version":"1.0","benchmark_profile":{{"name":"t"}},"phases":[{phase}]}}"#
+        )
+    }
+
+    fn ok_phase() -> &'static str {
+        r#"{"id":"P","connections":1,
+            "commands":[{"command":"get","weight":1.0}],
+            "keyspace":{"keys_count":10,"key_size_bytes":16,"key_prefix":"k:","generation_alg":"sequential_int"},
+            "completion":{"type":"requests","requests":100}}"#
+    }
+
+    fn err_contains(json: &str, needle: &str) {
+        match parse_workload_config_str(json) {
+            Ok(_) => panic!("expected validation error containing {needle:?}, got Ok"),
+            Err(ConfigError::Invalid(m)) => {
+                assert!(m.contains(needle), "error {m:?} missing {needle:?}")
+            }
+            Err(other) => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn valid_workload_passes() {
+        assert!(parse_workload_config_str(&workload_with(ok_phase())).is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_connections() {
+        let phase = r#"{"id":"P","connections":0,
+            "commands":[{"command":"get","weight":1.0}],
+            "keyspace":{"keys_count":10,"key_size_bytes":16,"key_prefix":"k:","generation_alg":"sequential_int"},
+            "completion":{"type":"requests","requests":100}}"#;
+        err_contains(&workload_with(phase), "connections");
+    }
+
+    #[test]
+    fn rejects_empty_commands() {
+        let phase = r#"{"id":"P","connections":1,
+            "commands":[],
+            "keyspace":{"keys_count":10,"key_size_bytes":16,"key_prefix":"k:","generation_alg":"sequential_int"},
+            "completion":{"type":"requests","requests":100}}"#;
+        err_contains(&workload_with(phase), "command");
+    }
+
+    #[test]
+    fn rejects_zero_keys_count() {
+        // The exact bug the validation guards: keys_count 0 would later panic in
+        // KeyGenerator (`% keys_count`) mid-run. It must fail at load time.
+        let phase = r#"{"id":"P","connections":1,
+            "commands":[{"command":"get","weight":1.0}],
+            "keyspace":{"keys_count":0,"key_size_bytes":16,"key_prefix":"k:","generation_alg":"sequential_int"},
+            "completion":{"type":"requests","requests":100}}"#;
+        err_contains(&workload_with(phase), "keys_count");
+    }
+
+    #[test]
+    fn rejects_unknown_generation_alg() {
+        let phase = r#"{"id":"P","connections":1,
+            "commands":[{"command":"get","weight":1.0}],
+            "keyspace":{"keys_count":10,"key_size_bytes":16,"key_prefix":"k:","generation_alg":"zipfian"},
+            "completion":{"type":"requests","requests":100}}"#;
+        err_contains(&workload_with(phase), "generation_alg");
+    }
+
+    #[test]
+    fn rejects_unknown_completion_type() {
+        let phase = r#"{"id":"P","connections":1,
+            "commands":[{"command":"get","weight":1.0}],
+            "keyspace":{"keys_count":10,"key_size_bytes":16,"key_prefix":"k:","generation_alg":"sequential_int"},
+            "completion":{"type":"forever"}}"#;
+        err_contains(&workload_with(phase), "completion.type");
+    }
+
+    #[test]
+    fn rejects_empty_phases() {
+        let json = r#"{"schema_version":"1.0","benchmark_profile":{"name":"t"},"phases":[]}"#;
+        err_contains(json, "phase");
+    }
+}

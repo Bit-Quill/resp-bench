@@ -16,9 +16,12 @@ name = "resp_bench"
 path = "src/lib.rs"
 
 [dependencies]
-# The Valkey GLIDE native Rust client (blocking `sync` layer). Sourced from the
-# local checkout; APIs mirror redis-rs. Pin by path until it is published.
-glide = { package = "glide-rust", path = "../../valkey-glide/rust", default-features = true }
+# The Valkey GLIDE native Rust client (blocking `sync` layer). Sourced from a
+# sibling checkout; APIs mirror redis-rs. Pinned by path until GLIDE Rust is
+# published to crates.io. The crate's package name is `valkey-glide` (its lib is
+# `glide`), so we alias it to `glide` here. See the README for the expected
+# checkout layout and pinned commit.
+glide = { package = "valkey-glide", path = "../../valkey-glide/rust", default-features = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -30,8 +33,8 @@ base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 # The published redis-rs client, as a second (pooling) driver alongside GLIDE.
-# Aliased to avoid confusion with the vendored fork GLIDE builds on internally.
-redis = { version = "0.25", features = ["r2d2"] }
+# `tls-rustls` gives the blocking connection a TLS backend so `rediss://` works.
+redis = { version = "0.25", features = ["r2d2", "tls-rustls"] }
 r2d2 = "0.8"
 
 [dev-dependencies]

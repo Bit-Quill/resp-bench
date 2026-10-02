@@ -3,16 +3,45 @@
 //! Records nothing on the wire; returns a synthetic latency so the engine,
 //! metrics, and NDJSON output can be exercised without a live server. An
 //! optional `error_rate` in `specific_driver_config` injects failures.
+//!
+//! For tests that need to inspect the key stream the engine issues, setting
+//! `specific_driver_config.capture_id` to a string makes GET/SET keys append to
+//! a process-global registry under that id (see [`captured_keys`]). PING records
+//! nothing, so a capture also proves PING consumes no key.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use crate::client::{BenchmarkClient, TimedResult};
 use crate::config::DriverConfig;
+
+/// Process-global key-capture registry, keyed by `capture_id`.
+fn registry() -> &'static Mutex<HashMap<String, Vec<String>>> {
+    static REG: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Keys captured so far for `capture_id` (test helper).
+pub fn captured_keys(capture_id: &str) -> Vec<String> {
+    registry()
+        .lock()
+        .unwrap()
+        .get(capture_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Clear any captured keys for `capture_id` (test helper).
+pub fn reset_capture(capture_id: &str) {
+    registry().lock().unwrap().remove(capture_id);
+}
 
 pub struct RecordingClient {
     counter: AtomicU64,
     latency_micros: u64,
     error_every: u64, // 0 = never error; N = fail 1 in N
+    capture_id: Option<String>,
 }
 
 impl RecordingClient {
@@ -21,6 +50,18 @@ impl RecordingClient {
             counter: AtomicU64::new(0),
             latency_micros: 100,
             error_every: 0,
+            capture_id: None,
+        }
+    }
+
+    fn capture(&self, key: &str) {
+        if let Some(id) = &self.capture_id {
+            registry()
+                .lock()
+                .unwrap()
+                .entry(id.clone())
+                .or_default()
+                .push(key.to_string());
         }
     }
 
@@ -60,19 +101,29 @@ impl BenchmarkClient for RecordingClient {
         {
             self.latency_micros = us;
         }
+        if let Some(id) = config
+            .specific_driver_config
+            .get("capture_id")
+            .and_then(|v| v.as_str())
+        {
+            self.capture_id = Some(id.to_string());
+        }
         Ok(())
     }
 
-    fn get(&self, _key: &str) -> TimedResult {
+    fn get(&self, key: &str) -> TimedResult {
+        self.capture(key);
         self.record()
     }
 
-    fn set(&self, _key: &str, _value: &[u8]) -> TimedResult {
+    fn set(&self, key: &str, _value: &[u8]) -> TimedResult {
+        self.capture(key);
         self.record()
     }
 
     fn ping(&self) -> TimedResult {
-        // Warmup PINGs always succeed for the recording driver.
+        // Warmup PINGs always succeed for the recording driver. PING records no
+        // key, so a key capture reflects only key-consuming commands.
         TimedResult::ok(self.latency_micros)
     }
 
