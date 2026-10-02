@@ -286,10 +286,11 @@ fn ping_in_sequential_mix_leaves_no_keyspace_holes() {
 #[test]
 fn latency_summary_matches_recorded_values() {
     // Pin the summary wiring: a known latency distribution must map to the right
-    // percentile slots. The recording driver's latency is latency_micros + n%50,
-    // so with latency_micros=1000 all samples fall in [1000, 1049]. min/p50/max
-    // must land in that band and be ordered — a swapped min/max or p50/p999
-    // mapping would break these bounds.
+    // percentile slots. The recording driver emits `latency_micros + (n%50) *
+    // latency_spread_micros`, so with base 1000 and spread 1000 the samples are
+    // 1000, 2000, ..., 50000 — 50 values far enough apart to sit in distinct HDR
+    // buckets. min/p50/max are then well separated, so a swapped min/max or a
+    // p50 sourced from p999 is caught, not hidden by bucket rounding.
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("m.ndjson");
     let out_str = out.to_str().unwrap();
@@ -306,7 +307,7 @@ fn latency_summary_matches_recorded_values() {
     }"#;
 
     let driver = parse_driver_config_str(&recording_driver(
-        r#","specific_driver_config":{"latency_micros":1000}"#,
+        r#","specific_driver_config":{"latency_micros":1000,"latency_spread_micros":1000}"#,
     ))
     .unwrap();
     let wl = parse_workload_config_str(workload).unwrap();
@@ -325,12 +326,24 @@ fn latency_summary_matches_recorded_values() {
     let p999 = s["p999"].as_u64().unwrap();
     let max = s["max"].as_u64().unwrap();
 
-    // HDR has 3 sig figs; allow +/-1us slack at these magnitudes.
-    assert!((999..=1001).contains(&min), "min={min}");
-    assert!((1049..=1051).contains(&max), "max={max}");
-    // Ordered and inside the known band — catches min<->max or p50<->p999 swaps.
-    assert!(min <= p50 && p50 <= p95 && p95 <= p99 && p99 <= p999 && p999 <= max);
-    assert!((1000..=1050).contains(&p50), "p50={p50} outside band");
+    // Values are 1000..50000 in 1000-step buckets (3 sig figs → ~0.1% slack).
+    // Distinct, well-separated bands so a field swap can't pass:
+    assert!((995..=1005).contains(&min), "min={min} (expected ~1000)");
+    assert!(
+        (49_900..=50_100).contains(&max),
+        "max={max} (expected ~50000)"
+    );
+    // p50 sits near the middle of 1000..50000 — nowhere near min or max, so a
+    // p50<->p999 or p50<->min swap is caught.
+    assert!(
+        (24_000..=27_000).contains(&p50),
+        "p50={p50} (expected ~25500)"
+    );
+    // Strict monotonic ordering across distinct bands.
+    assert!(
+        min < p50 && p50 < p95 && p95 <= p99 && p99 <= p999 && p999 <= max,
+        "percentiles not ordered: min={min} p50={p50} p95={p95} p99={p99} p999={p999} max={max}"
+    );
 }
 
 #[test]

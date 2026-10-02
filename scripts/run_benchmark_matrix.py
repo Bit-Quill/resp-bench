@@ -137,6 +137,9 @@ DRIVER_ENGINE_MAP = {
     # Rust drivers
     "valkey-glide-rust": "rust",
     "redis-rs": "rust",
+    # Go drivers
+    "valkey-glide-go": "go",
+    "go-redis": "go",
     # Recording (default to java)
     "recording": "java",
 }

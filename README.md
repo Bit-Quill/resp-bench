@@ -107,6 +107,7 @@ Thread-based system metrics collector that runs alongside benchmarks, collecting
 | C# | ✅ Ready | valkey-glide-csharp, StackExchange.Redis |
 | PHP | ✅ Ready | valkey-glide-php, PHPRedis |
 | Node.js | ✅ Ready | valkey-glide-node, ioredis, iovalkey |
+| Go | ✅ Ready | valkey-glide-go, go-redis |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 | Rust | ✅ Ready | valkey-glide-rust, redis-rs |
 
@@ -141,6 +142,7 @@ resp-bench/
 ├── php/                         # PHP benchmark engine
 ├── node/                        # Node.js (TypeScript) benchmark engine
 ├── rust/                        # Rust benchmark engine
+├── go/                          # Go benchmark engine
 ├── docs/
 │   ├── ARCHITECTURE.md          # System architecture
 │   ├── BENCHMARK_MATRIX.md      # Matrix orchestrator docs
@@ -150,8 +152,9 @@ resp-bench/
 │   ├── BENCHMARKS_CSHARP.md     # C# benchmark details
 │   ├── BENCHMARKS_RUBY.md       # Ruby benchmark details
 │   ├── BENCHMARKS_PHP.md        # PHP benchmark details
-│   └── BENCHMARKS_NODE.md       # Node.js benchmark details
-│   └── BENCHMARKS_RUST.md       # Rust benchmark details
+│   ├── BENCHMARKS_NODE.md       # Node.js benchmark details
+│   ├── BENCHMARKS_RUST.md       # Rust benchmark details
+│   └── BENCHMARKS_GO.md         # Go benchmark details
 └── graphs/interactive/          # Generated HTML graphs
 ```
 
@@ -211,6 +214,7 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make php-test` | Run PHP unit tests |
 | `make node-test` | Run Node.js tests (unit + integration) |
 | `make rust-test` | Run Rust tests (unit + integration) |
+| `make go-test` | Run Go tests |
 
 ### Engines
 
@@ -222,10 +226,12 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make php-run` | Run PHP engine (DRIVER, WORKLOAD, SERVER) |
 | `make node-run` | Run Node.js engine (DRIVER, WORKLOAD, SERVER) |
 | `make rust-run` | Run Rust engine (DRIVER, WORKLOAD, SERVER) |
+| `make go-run` | Run Go engine (DRIVER, WORKLOAD, SERVER) |
 | `make java-build` | Build Java JAR |
 | `make csharp-build` | Build C# executable |
 | `make node-build` | Install deps and compile the Node.js engine |
 | `make rust-build` | Build the Rust engine (release) |
+| `make go-build` | Compile the Go engine |
 
 ### Server Management
 

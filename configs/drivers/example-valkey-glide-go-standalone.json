@@ -1,0 +1,7 @@
+{
+    "schema_version": "1.0",
+    "description": "Example Valkey GLIDE Go standalone driver",
+    "driver_id": "valkey-glide-go",
+    "mode": "standalone",
+    "specific_driver_config": {}
+}

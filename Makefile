@@ -38,6 +38,7 @@ WORK_DIR=$(shell pwd)/work
 	node-build node-deps node-test node-unit-test node-integration-test \
 	node-run node-clean node-info \
 	rust-build rust-test rust-run rust-clean rust-info \
+	go-build go-test go-run go-clean go-info \
 	config-editor-build config-editor-dev
 
 # ============================================================================
@@ -555,6 +556,31 @@ node-info: node-build
 
 node-clean:
 	cd node && rm -rf dist node_modules coverage
+
+# ============================================================================
+# Go Engine
+# ============================================================================
+
+GO_BIN=go/bin/resp-bench
+
+go-build:
+	cd go && go build -o bin/resp-bench ./cmd/resp-bench
+
+go-test:
+	cd go && go test ./...
+
+go-run: go-build
+	./$(GO_BIN) \
+		--server $(SERVER) \
+		--driver $(DRIVER) \
+		--workload $(WORKLOAD) \
+		--metrics $(METRICS_OUTPUT)
+
+go-info: go-build
+	./$(GO_BIN) --info
+
+go-clean:
+	cd go && rm -rf bin
 
 # ============================================================================
 # Config Editor

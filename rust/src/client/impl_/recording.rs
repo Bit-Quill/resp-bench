@@ -40,6 +40,7 @@ pub fn reset_capture(capture_id: &str) {
 pub struct RecordingClient {
     counter: AtomicU64,
     latency_micros: u64,
+    latency_spread_micros: u64,
     error_every: u64, // 0 = never error; N = fail 1 in N
     capture_id: Option<String>,
 }
@@ -49,6 +50,7 @@ impl RecordingClient {
         RecordingClient {
             counter: AtomicU64::new(0),
             latency_micros: 100,
+            latency_spread_micros: 1,
             error_every: 0,
             capture_id: None,
         }
@@ -67,8 +69,10 @@ impl RecordingClient {
 
     fn record(&self) -> TimedResult {
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
-        // Deterministic-ish latency spread so histograms have shape.
-        let latency = self.latency_micros + (n % 50);
+        // Deterministic latency with a configurable spread so histograms have
+        // shape. `latency_spread_micros` sets the gap between the 50 buckets, so
+        // a test can make min/p50/max land in distinct HDR buckets.
+        let latency = self.latency_micros + (n % 50) * self.latency_spread_micros;
         if self.error_every > 0 && (n + 1).is_multiple_of(self.error_every) {
             TimedResult::err(latency)
         } else {
@@ -100,6 +104,13 @@ impl BenchmarkClient for RecordingClient {
             .and_then(|v| v.as_u64())
         {
             self.latency_micros = us;
+        }
+        if let Some(spread) = config
+            .specific_driver_config
+            .get("latency_spread_micros")
+            .and_then(|v| v.as_u64())
+        {
+            self.latency_spread_micros = spread.max(1);
         }
         if let Some(id) = config
             .specific_driver_config
