@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "description": "redis-rs (published redis crate) with an r2d2 pool, tuned for high throughput.",
+  "driver_id": "redis-rs",
+  "mode": "standalone",
+  "command_timeout_ms": 5000
+}

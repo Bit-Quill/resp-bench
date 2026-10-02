@@ -14,6 +14,7 @@ A multi-language benchmark suite for RESP protocol (Redis/Valkey) compatible dat
 
 - Python 3.8+, Java 21+, Maven
 - Node.js 20+ (for the Node.js engine)
+- Rust 1.94.1+ / Cargo (for the Rust engine; pinned via `rust/rust-toolchain.toml`)
 - Make
 - A server CLI (`valkey-cli`) for the matrix runner's readiness probe and per-cell
   FLUSHALL — the Makefile's `server-*` targets build one into
@@ -108,6 +109,7 @@ Thread-based system metrics collector that runs alongside benchmarks, collecting
 | Node.js | ✅ Ready | valkey-glide-node, ioredis, iovalkey |
 | Go | ✅ Ready | valkey-glide-go, go-redis |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
+| Rust | ✅ Ready | valkey-glide-rust, redis-rs |
 
 ## Project Structure
 
@@ -139,6 +141,7 @@ resp-bench/
 ├── csharp/                      # C# (.NET 10) benchmark engine
 ├── php/                         # PHP benchmark engine
 ├── node/                        # Node.js (TypeScript) benchmark engine
+├── rust/                        # Rust benchmark engine
 ├── go/                          # Go benchmark engine
 ├── docs/
 │   ├── ARCHITECTURE.md          # System architecture
@@ -150,6 +153,7 @@ resp-bench/
 │   ├── BENCHMARKS_RUBY.md       # Ruby benchmark details
 │   ├── BENCHMARKS_PHP.md        # PHP benchmark details
 │   ├── BENCHMARKS_NODE.md       # Node.js benchmark details
+│   ├── BENCHMARKS_RUST.md       # Rust benchmark details
 │   └── BENCHMARKS_GO.md         # Go benchmark details
 └── graphs/interactive/          # Generated HTML graphs
 ```
@@ -209,6 +213,7 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make csharp-test` | Run C# tests |
 | `make php-test` | Run PHP unit tests |
 | `make node-test` | Run Node.js tests (unit + integration) |
+| `make rust-test` | Run Rust tests (unit + integration) |
 | `make go-test` | Run Go tests |
 
 ### Engines
@@ -220,10 +225,12 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make csharp-run` | Run C# engine (DRIVER, WORKLOAD, SERVER) |
 | `make php-run` | Run PHP engine (DRIVER, WORKLOAD, SERVER) |
 | `make node-run` | Run Node.js engine (DRIVER, WORKLOAD, SERVER) |
+| `make rust-run` | Run Rust engine (DRIVER, WORKLOAD, SERVER) |
 | `make go-run` | Run Go engine (DRIVER, WORKLOAD, SERVER) |
 | `make java-build` | Build Java JAR |
 | `make csharp-build` | Build C# executable |
 | `make node-build` | Install deps and compile the Node.js engine |
+| `make rust-build` | Build the Rust engine (release) |
 | `make go-build` | Compile the Go engine |
 
 ### Server Management

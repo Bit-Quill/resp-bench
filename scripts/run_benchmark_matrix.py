@@ -134,6 +134,9 @@ DRIVER_ENGINE_MAP = {
     # Python drivers
     "redis-py": "python",
     "valkey-glide-python": "python",
+    # Rust drivers
+    "valkey-glide-rust": "rust",
+    "redis-rs": "rust",
     # Go drivers
     "valkey-glide-go": "go",
     "go-redis": "go",
