@@ -106,6 +106,7 @@ Thread-based system metrics collector that runs alongside benchmarks, collecting
 | C# | ✅ Ready | valkey-glide-csharp, StackExchange.Redis |
 | PHP | ✅ Ready | valkey-glide-php, PHPRedis |
 | Node.js | ✅ Ready | valkey-glide-node, ioredis, iovalkey |
+| Go | ✅ Ready | valkey-glide-go, go-redis |
 | Python | 🚧 Planned | redis-py, aioredis, valkey-glide |
 
 ## Project Structure
@@ -138,6 +139,7 @@ resp-bench/
 ├── csharp/                      # C# (.NET 10) benchmark engine
 ├── php/                         # PHP benchmark engine
 ├── node/                        # Node.js (TypeScript) benchmark engine
+├── go/                          # Go benchmark engine
 ├── docs/
 │   ├── ARCHITECTURE.md          # System architecture
 │   ├── BENCHMARK_MATRIX.md      # Matrix orchestrator docs
@@ -147,7 +149,8 @@ resp-bench/
 │   ├── BENCHMARKS_CSHARP.md     # C# benchmark details
 │   ├── BENCHMARKS_RUBY.md       # Ruby benchmark details
 │   ├── BENCHMARKS_PHP.md        # PHP benchmark details
-│   └── BENCHMARKS_NODE.md       # Node.js benchmark details
+│   ├── BENCHMARKS_NODE.md       # Node.js benchmark details
+│   └── BENCHMARKS_GO.md         # Go benchmark details
 └── graphs/interactive/          # Generated HTML graphs
 ```
 
@@ -206,6 +209,7 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make csharp-test` | Run C# tests |
 | `make php-test` | Run PHP unit tests |
 | `make node-test` | Run Node.js tests (unit + integration) |
+| `make go-test` | Run Go tests |
 
 ### Engines
 
@@ -216,9 +220,11 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make csharp-run` | Run C# engine (DRIVER, WORKLOAD, SERVER) |
 | `make php-run` | Run PHP engine (DRIVER, WORKLOAD, SERVER) |
 | `make node-run` | Run Node.js engine (DRIVER, WORKLOAD, SERVER) |
+| `make go-run` | Run Go engine (DRIVER, WORKLOAD, SERVER) |
 | `make java-build` | Build Java JAR |
 | `make csharp-build` | Build C# executable |
 | `make node-build` | Install deps and compile the Node.js engine |
+| `make go-build` | Compile the Go engine |
 
 ### Server Management
 
