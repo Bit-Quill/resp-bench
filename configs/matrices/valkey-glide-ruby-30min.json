@@ -1,0 +1,14 @@
+{
+    "description": "Retry Valkey GLIDE Ruby using the 30-minute steady-state workload",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-30-mins.json",
+    "iterations": 1,
+    "dimensions": {
+        "connections": [
+            1
+        ],
+        "driver_config": [
+            "configs/drivers/default/valkey-glide-ruby.json"
+        ]
+    }
+}

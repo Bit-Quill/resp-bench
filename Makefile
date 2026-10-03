@@ -373,10 +373,10 @@ ruby-integration-test: server-standalone-start
 
 ruby-run: ruby-build
 	cd ruby && bundle exec ruby bin/resp-bench \
-		--server $(SERVER) \
-		--driver ../$(DRIVER) \
-		--workload ../$(WORKLOAD) \
-		--metrics ../$(METRICS_OUTPUT)
+		--server "$(SERVER)" \
+		--driver "$(abspath $(DRIVER))" \
+		--workload "$(abspath $(WORKLOAD))" \
+		--metrics "$(abspath $(METRICS_OUTPUT))"
 
 ruby-clean:
 	cd ruby && rm -rf vendor .bundle Gemfile.lock
