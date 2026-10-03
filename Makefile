@@ -401,11 +401,11 @@ ruby-integration-test: server-standalone-start
 	$(MAKE) server-standalone-stop
 
 ruby-run: ruby-build
-	cd ruby && bundle exec ruby bin/resp-bench \
-		--server $(SERVER) \
-		--driver ../$(DRIVER) \
-		--workload ../$(WORKLOAD) \
-		--metrics ../$(METRICS_OUTPUT)
+	BUNDLE_GEMFILE="$(CURDIR)/ruby/Gemfile" bundle exec ruby ruby/bin/resp-bench \
+		--server "$(SERVER)" \
+		--driver "$(DRIVER)" \
+		--workload "$(WORKLOAD)" \
+		--metrics "$(METRICS_OUTPUT)"
 
 ruby-clean:
 	cd ruby && rm -rf vendor .bundle Gemfile.lock
