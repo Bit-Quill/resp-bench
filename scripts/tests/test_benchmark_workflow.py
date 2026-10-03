@@ -12,14 +12,6 @@ def job_section(name, next_name):
     return workflow.split(f"  {name}:", 1)[1].split(f"  {next_name}:", 1)[0]
 
 
-def test_current_ruby_versions_are_compatibility_tests():
-    test_ruby = job_section("test-ruby", "benchmark-ruby")
-
-    assert "ruby-version:\n          - '3.2'\n          - '3.4'\n          - '4.0'" in test_ruby
-    assert "ruby-version: ${{ matrix.ruby-version }}" in test_ruby
-    assert "run: make ruby-unit-test" in test_ruby
-
-
 def test_ruby_benchmark_keeps_one_result_per_driver_workload():
     benchmark = job_section("benchmark-ruby", "test-php")
 

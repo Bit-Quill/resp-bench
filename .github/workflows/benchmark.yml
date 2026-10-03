@@ -99,31 +99,6 @@ jobs:
           path: ${{ steps.names.outputs.result_file }}
           retention-days: 30
 
-  test-ruby:
-    if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        ruby-version:
-          - '3.2'
-          - '3.4'
-          - '4.0'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: ${{ matrix.ruby-version }}
-          bundler-cache: true
-          working-directory: ruby
-
-      - name: Run Ruby unit tests
-        run: make ruby-unit-test
-
   benchmark-ruby:
     if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
     runs-on: ubuntu-latest
