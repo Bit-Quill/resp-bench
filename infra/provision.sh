@@ -296,10 +296,14 @@ log "LANGUAGE: Rust — installing protobuf-compiler + rustup toolchain"
 # protoc for the GLIDE glide-core build.
 pkg_install protobuf-compiler -- protobuf-compiler
 
-# Install rustup non-interactively if cargo is not already on PATH. rustup is
-# feed-independent (distro Rust is often too old for the 1.94.1 pin), and it
-# reads rust-toolchain.toml to select the exact channel on first use.
-if ! command -v cargo >/dev/null 2>&1 && [ ! -x "${HOME}/.cargo/bin/cargo" ]; then
+# Install rustup non-interactively unless it is already present. Guard on
+# *rustup* specifically, not on any `cargo`: a distro-packaged cargo (dnf/apt)
+# ignores rust-toolchain.toml, so building against it would fail GLIDE's
+# `rust-version = "1.94.1"` MSRV. rustup is feed-independent and reads
+# rust-toolchain.toml to select the exact channel on first use; since
+# ~/.cargo/bin is prepended to PATH below, the rustup proxy shadows any distro
+# cargo.
+if ! command -v rustup >/dev/null 2>&1 && [ ! -x "${HOME}/.cargo/bin/rustup" ]; then
   curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
 fi
 # rustup/cargo live under ~/.cargo/bin; expose them to this shell and downstream.
