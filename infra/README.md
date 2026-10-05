@@ -190,5 +190,10 @@ REPO_DIR=/path/to/resp-bench bash infra/provision.sh
 ```
 
 It installs JDK 21 + Maven, Ruby + bundler, the .NET SDK, Python + pinned deps,
-builds the Valkey server, and warms the Java/Ruby/C# build caches. `SKIP_SERVER_BUILD=1`
-and `SKIP_WARM_CACHES=1` skip the slow steps for quick smoke checks.
+and the Rust toolchain (rustup, honoring `rust/rust-toolchain.toml`) plus
+`protobuf-compiler`; it clones the `valkey-glide` Rust client beside the repo
+(the Rust engine depends on it by path), builds the Valkey server, and warms the
+Java/Ruby/C#/Node/Python/Rust build caches. The valkey-glide checkout location,
+repo URL, and pinned commit are overridable via `GLIDE_CHECKOUT_DIR`,
+`GLIDE_REPO_URL`, and `GLIDE_COMMIT`. `SKIP_SERVER_BUILD=1` and
+`SKIP_WARM_CACHES=1` skip the slow steps for quick smoke checks.
