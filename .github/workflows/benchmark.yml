@@ -486,7 +486,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: valkey-io/valkey-glide
-          ref: 86e349014bc8358b822f8b8fb703a509b3ae9af7
+          ref: 0b46f0551b0656cb664fac39e4f9ce171f76a607
           path: valkey-glide-src
 
       - name: Place valkey-glide beside the workspace
@@ -532,7 +532,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: valkey-io/valkey-glide
-          ref: 86e349014bc8358b822f8b8fb703a509b3ae9af7
+          ref: 0b46f0551b0656cb664fac39e4f9ce171f76a607
           path: valkey-glide-src
 
       - name: Place valkey-glide beside the workspace

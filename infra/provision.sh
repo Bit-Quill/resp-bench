@@ -311,7 +311,7 @@ rustup --version 2>&1 | sed 's/^/[provision]   /' || true
 # (../../valkey-glide/rust) resolves. Parameterised by env, defaulting to the
 # commit CI pins. Idempotent: fetch + checkout if the checkout already exists.
 GLIDE_REPO_URL="${GLIDE_REPO_URL:-https://github.com/valkey-io/valkey-glide.git}"
-GLIDE_COMMIT="${GLIDE_COMMIT:-86e349014bc8358b822f8b8fb703a509b3ae9af7}"
+GLIDE_COMMIT="${GLIDE_COMMIT:-0b46f0551b0656cb664fac39e4f9ce171f76a607}"
 GLIDE_CHECKOUT_DIR="${GLIDE_CHECKOUT_DIR:-$(cd "${REPO_DIR}/.." && pwd)/valkey-glide}"
 log "LANGUAGE: Rust — ensuring valkey-glide checkout at ${GLIDE_CHECKOUT_DIR} (${GLIDE_COMMIT})"
 if [ ! -d "${GLIDE_CHECKOUT_DIR}/.git" ]; then
