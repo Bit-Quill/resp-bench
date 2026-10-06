@@ -203,6 +203,46 @@ class TestConfigParsing:
         with pytest.raises(ValueError, match="no-such-driver.json"):
             parse_matrix_config(p)
 
+    def test_unknown_driver_id_raises_during_matrix_validation(self, tmp_path):
+        driver = tmp_path / "driver.json"
+        driver.write_text(json.dumps({
+            "schema_version": "1.0",
+            "driver_id": "valkey-glide-rbuy",
+            "mode": "standalone",
+        }))
+        config = {
+            "x_axis": "connections",
+            "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+            "dimensions": {
+                "connections": [1],
+                "driver_config": [str(driver)],
+            },
+        }
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match="unrecognized driver_id 'valkey-glide-rbuy'"):
+            parse_matrix_config(p)
+
+    def test_non_canonical_driver_id_raises_during_matrix_validation(self, tmp_path):
+        driver = tmp_path / "driver.json"
+        driver.write_text(json.dumps({
+            "schema_version": "1.0",
+            "driver_id": " valkey-glide-ruby ",
+            "mode": "standalone",
+        }))
+        config = {
+            "x_axis": "connections",
+            "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+            "dimensions": {
+                "connections": [1],
+                "driver_config": [str(driver)],
+            },
+        }
+        p = tmp_path / "bad.json"
+        p.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match="unrecognized driver_id"):
+            parse_matrix_config(p)
+
     def test_referenced_paths_are_openable_after_parse(self, simple_matrix, monkeypatch):
         # A path that survives parse_matrix_config() must be one the run can
         # actually open — validating against a different base than the runtime

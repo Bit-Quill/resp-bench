@@ -102,7 +102,7 @@ jobs:
   benchmark-ruby:
     if: ${{ inputs.engines == 'all' || inputs.engines == 'ruby' }}
     runs-on: ubuntu-latest
-    
+
     strategy:
       fail-fast: false
       matrix:

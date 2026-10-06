@@ -4,6 +4,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import pytest
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from run_benchmark_matrix import (
     config_needs_server,
     count_ndjson_lines,
     default_run_id,
+    detect_engine_for_driver,
     driver_server_settings,
     existing_result_files,
     ndjson_size,
@@ -29,6 +31,8 @@ from run_benchmark_matrix import (
     validate_run_id,
     write_manifest,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -59,6 +63,156 @@ def combos_for(driver_paths):
         {"label": Path(p).stem, "driver_config": p, "params": {}, "bindings": {}}
         for p in driver_paths
     ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Engine detection
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDetectEngineForDriver:
+    @pytest.mark.parametrize("driver_id", ["redis-rb", "valkey-glide-ruby"])
+    def test_known_ruby_driver_selects_registered_engine(self, tmp_path, driver_id):
+        driver = make_driver(tmp_path, "ruby", driver_id=driver_id)
+        assert detect_engine_for_driver(driver) == "ruby"
+
+    def test_unknown_driver_fails_instead_of_falling_back_to_java(self, tmp_path):
+        driver = make_driver(tmp_path, "typo", driver_id="valkey-glide-rbuy")
+        with pytest.raises(ValueError, match="unrecognized driver_id 'valkey-glide-rbuy'"):
+            detect_engine_for_driver(driver)
+
+    @pytest.mark.parametrize("driver_id", [" valkey-glide-ruby ", "VALKEY-GLIDE-RUBY"])
+    def test_non_canonical_driver_id_fails(self, tmp_path, driver_id):
+        driver = make_driver(tmp_path, "non-canonical", driver_id=driver_id)
+        with pytest.raises(ValueError, match="unrecognized driver_id"):
+            detect_engine_for_driver(driver)
+
+    def test_missing_driver_id_fails(self, tmp_path):
+        driver = write_json(tmp_path / "missing-id.json", {"mode": "standalone"})
+        with pytest.raises(ValueError, match="no non-empty driver_id"):
+            detect_engine_for_driver(driver)
+
+    @pytest.mark.parametrize("driver_id", ["", " "])
+    def test_empty_driver_id_fails(self, tmp_path, driver_id):
+        driver = make_driver(tmp_path, "empty-id", driver_id=driver_id)
+        with pytest.raises(ValueError, match="no non-empty driver_id"):
+            detect_engine_for_driver(driver)
+
+    def test_malformed_driver_config_fails(self, tmp_path):
+        driver = tmp_path / "malformed.json"
+        driver.write_text("{")
+        with pytest.raises(ValueError, match="is not valid JSON"):
+            detect_engine_for_driver(driver)
+
+    def test_non_object_driver_config_fails(self, tmp_path):
+        driver = write_json(tmp_path / "array.json", ["valkey-glide-ruby"])
+        with pytest.raises(ValueError, match="must contain a JSON object"):
+            detect_engine_for_driver(driver)
+
+    def test_unreadable_driver_config_fails(self, tmp_path):
+        driver = tmp_path / "missing.json"
+        with pytest.raises(ValueError, match="cannot read driver config"):
+            detect_engine_for_driver(driver)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLI preflight classification
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestCliPreflightClassification:
+    def test_invalid_driver_id_exits_preflight_without_traceback(self, tmp_path):
+        driver = make_driver(tmp_path, "unknown", driver_id="valkey-glide-rbuy")
+        matrix = write_json(tmp_path / "matrix.json", {
+            "x_axis": "connections",
+            "iterations": 1,
+            "workload_template": (
+                "configs/workloads/reference/"
+                "basic-standalone-single-client-1M-reqs.json"
+            ),
+            "dimensions": {
+                "connections": [1],
+                "driver_config": [driver],
+            },
+        })
+        output = tmp_path / "out"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "run_benchmark_matrix.py"),
+                "--matrix",
+                str(matrix),
+                "--output-dir",
+                str(output),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 2
+        assert "preflight failed, no benchmarks were run" in result.stderr
+        assert "unrecognized driver_id 'valkey-glide-rbuy'" in result.stderr
+        assert "Traceback" not in result.stderr
+        assert not output.exists()
+
+    @pytest.mark.parametrize(
+        ("filename", "contents", "expected"),
+        [
+            ("malformed.json", "{", "Expecting property name"),
+            ("non-object.json", "[]", "must contain a JSON object"),
+        ],
+    )
+    def test_invalid_matrix_file_exits_preflight_without_traceback(
+        self, tmp_path, filename, contents, expected
+    ):
+        matrix = tmp_path / filename
+        matrix.write_text(contents)
+        output = tmp_path / "out"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "run_benchmark_matrix.py"),
+                "--matrix",
+                str(matrix),
+                "--output-dir",
+                str(output),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 2
+        assert "preflight failed, no benchmarks were run" in result.stderr
+        assert expected in result.stderr
+        assert "Traceback" not in result.stderr
+        assert not output.exists()
+
+    def test_missing_matrix_file_exits_preflight_without_traceback(self, tmp_path):
+        output = tmp_path / "out"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "run_benchmark_matrix.py"),
+                "--matrix",
+                str(tmp_path / "missing.json"),
+                "--output-dir",
+                str(output),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 2
+        assert "preflight failed, no benchmarks were run" in result.stderr
+        assert "No such file or directory" in result.stderr
+        assert "Traceback" not in result.stderr
+        assert not output.exists()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -489,6 +643,28 @@ def stub_engine(monkeypatch, returncode=0, records_written=0):
 
 
 class TestRunMatrixOutcomes:
+    def test_ruby_driver_launches_ruby_make_target(self, tmp_path, monkeypatch):
+        driver = make_driver(tmp_path, "ruby", driver_id="valkey-glide-ruby")
+        workload = write_json(tmp_path / "workload.json", {
+            "phases": [{"id": "STEADY", "connections": 1}],
+        })
+        matrix = write_json(tmp_path / "matrix.json", {
+            "x_axis": "connections",
+            "iterations": 1,
+            "workload_template": str(workload),
+            "dimensions": {"connections": [1], "driver_config": [driver]},
+        })
+        config = parse_matrix_config(matrix)
+        monkeypatch.setattr("run_benchmark_matrix.preflight_server", lambda *args: None)
+        calls = stub_engine(monkeypatch, returncode=0, records_written=1)
+
+        summary = run_matrix(config, tmp_path / "out", "h", 6379, run_id="r")
+
+        assert summary["failed"] == 0
+        assert calls[0][:2] == ["make", "ruby-run"]
+        manifest = json.loads((tmp_path / "out" / "r" / "_manifest.json").read_text())
+        assert manifest["cells"][0]["engine"] == "ruby"
+
     def test_successful_cell_exits_zero(self, recording_matrix, tmp_path, monkeypatch):
         calls = stub_engine(monkeypatch, returncode=0, records_written=1)
         summary = run_matrix(recording_matrix, tmp_path / "out", "h", 6379, run_id="r")

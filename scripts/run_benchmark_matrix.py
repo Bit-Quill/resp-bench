@@ -225,16 +225,37 @@ def open_config_path(path_str):
 def detect_engine_for_driver(driver_config_path):
     """Detect the correct engine (make target) for a driver config file.
 
-    Reads the driver_id from the JSON file and maps it to the engine name.
-    Falls back to 'java' if unknown.
+    Invalid configs and unregistered driver ids fail loudly rather than
+    producing results from the Java engine under the requested driver's label.
     """
     try:
         with open(driver_config_path) as f:
             config = json.load(f)
-        driver_id = config.get("driver_id", "").lower()
-        return DRIVER_ENGINE_MAP.get(driver_id, "java")
-    except (json.JSONDecodeError, OSError, KeyError):
-        return "java"
+    except OSError as e:
+        raise ValueError(
+            f"cannot read driver config '{driver_config_path}': {e}"
+        ) from e
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"driver config '{driver_config_path}' is not valid JSON: {e}"
+        ) from e
+
+    if not isinstance(config, dict):
+        raise ValueError(
+            f"driver config '{driver_config_path}' must contain a JSON object"
+        )
+
+    driver_id = config.get("driver_id")
+    if not isinstance(driver_id, str) or not driver_id.strip():
+        raise ValueError(
+            f"driver config '{driver_config_path}' has no non-empty driver_id"
+        )
+
+    if driver_id not in DRIVER_ENGINE_MAP:
+        raise ValueError(
+            f"unrecognized driver_id '{driver_id}' in '{driver_config_path}'"
+        )
+    return DRIVER_ENGINE_MAP[driver_id]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -308,6 +329,15 @@ def parse_matrix_config(matrix_path):
     with open(matrix_path) as f:
         raw = json.load(f)
 
+    if not isinstance(raw, dict):
+        raise ValueError(f"matrix config '{matrix_path}' must contain a JSON object")
+
+    raw_dimensions = raw.get("dimensions", {})
+    if not isinstance(raw_dimensions, dict):
+        raise ValueError(
+            f"matrix config '{matrix_path}' field 'dimensions' must contain a JSON object"
+        )
+
     config = {
         "description": raw.get("description", ""),
         "x_axis": raw.get("x_axis", DIM_CONNECTIONS),
@@ -319,7 +349,7 @@ def parse_matrix_config(matrix_path):
     }
 
     dimensions = {}
-    for name, spec in raw.get("dimensions", {}).items():
+    for name, spec in raw_dimensions.items():
         dimensions[name] = DimensionSpec(name, spec)
 
     config["dimensions"] = dimensions
@@ -335,16 +365,17 @@ def parse_matrix_config(matrix_path):
     if not config["workload_template"]:
         raise ValueError("'workload_template' is required in matrix config")
 
-    # Referenced config files must exist. Without this a typo'd path surfaces
-    # only mid-run — after the server is up and the engine has been built —
-    # because --dry-run never opens these files. Checking them through the same
-    # resolve_config_path() that generate_workload() and generate_driver_config()
-    # use means anything accepted here is openable by the run itself.
-    missing = []
+    # Referenced config files must exist, and every driver must map to a known
+    # engine. Without this, bad input surfaces only mid-run — after the server
+    # is up and engines have been built — or, historically, silently ran Java
+    # under the requested driver's label. Checking paths through the same
+    # resolve_config_path() that runtime consumers use means anything accepted
+    # here is openable by the run itself.
+    invalid_references = []
 
     workload_template = config["workload_template"]
     if not isinstance(workload_template, str) or resolve_config_path(workload_template) is None:
-        missing.append(f"workload_template: {workload_template!r}")
+        invalid_references.append(f"workload_template: {workload_template!r}")
 
     for value in dimensions[DIM_DRIVER_CONFIG].values:
         # Every value is checked, including "$binding" strings. Unlike other
@@ -352,13 +383,19 @@ def parse_matrix_config(matrix_path):
         # generate_series_combos() excludes it from the series dimensions, so
         # resolve_binding() never rewrites it and a "$foo" here would reach
         # open() verbatim.
-        if not isinstance(value, str) or resolve_config_path(value) is None:
-            missing.append(f"{DIM_DRIVER_CONFIG}: {value!r}")
+        resolved = resolve_config_path(value) if isinstance(value, str) else None
+        if resolved is None:
+            invalid_references.append(f"{DIM_DRIVER_CONFIG}: {value!r}")
+            continue
+        try:
+            detect_engine_for_driver(resolved)
+        except ValueError as e:
+            invalid_references.append(f"{DIM_DRIVER_CONFIG}: {e}")
 
-    if missing:
+    if invalid_references:
         raise ValueError(
-            f"matrix config '{matrix_path}' references files that do not exist:\n  "
-            + "\n  ".join(missing)
+            f"matrix config '{matrix_path}' has invalid file references:\n  "
+            + "\n  ".join(invalid_references)
         )
 
     return config
@@ -1225,7 +1262,11 @@ Exit codes:
 def main():
     args = parse_args()
 
-    config = parse_matrix_config(args.matrix)
+    try:
+        config = parse_matrix_config(args.matrix)
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        print(f"\nERROR: preflight failed, no benchmarks were run: {e}", file=sys.stderr)
+        sys.exit(EXIT_PREFLIGHT)
 
     # CLI overrides
     server_host = args.server_host or config.get("server_host") or "localhost"
