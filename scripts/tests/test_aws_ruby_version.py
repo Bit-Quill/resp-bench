@@ -30,25 +30,23 @@ def test_aws_dry_run_passes_ruby_client_version_to_cloudformation():
     assert "RubyClientVersion=1.2.3-rc4" in result.stdout
 
 
-def test_aws_runner_rejects_invalid_ruby_client_version():
+def test_aws_runner_defaults_to_latest_ruby_client_version():
     result = subprocess.run(
         [
             AWS_RUNNER,
             "deploy",
             "--dry-run",
-            "--ruby-client-version",
-            "latest",
         ],
         cwd=REPO_ROOT,
+        check=True,
         capture_output=True,
         text=True,
     )
 
-    assert result.returncode != 0
-    assert "invalid Ruby client version" in result.stderr
+    assert "RubyClientVersion=latest" in result.stdout
 
 
-def test_ruby_gemfile_uses_requested_client_version():
+def test_ruby_gemfile_supports_latest_and_exact_versions():
     ruby_script = """
     def source(*) = nil
     def gemspec(*) = nil
@@ -60,15 +58,25 @@ def test_ruby_gemfile_uses_requested_client_version():
     end
     load ARGV.fetch(0)
     """
-    env = os.environ | {"VALKEY_GLIDE_RUBY_VERSION": "2.3.4"}
-
-    result = subprocess.run(
+    latest_env = os.environ.copy()
+    latest_env.pop("VALKEY_GLIDE_RUBY_VERSION", None)
+    latest_result = subprocess.run(
         ["ruby", "-e", ruby_script, RUBY_GEMFILE],
         cwd=REPO_ROOT,
-        env=env,
+        env=latest_env,
         check=True,
         capture_output=True,
         text=True,
     )
 
-    assert result.stdout.strip() == "2.3.4"
+    exact_result = subprocess.run(
+        ["ruby", "-e", ruby_script, RUBY_GEMFILE],
+        cwd=REPO_ROOT,
+        env=os.environ | {"VALKEY_GLIDE_RUBY_VERSION": "2.3.4"},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert latest_result.stdout.strip() == ""
+    assert exact_result.stdout.strip() == "2.3.4"

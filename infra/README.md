@@ -101,7 +101,7 @@ infra/aws/bench-aws.sh deploy \
   --runtime-cap 360
 ```
 
-Use `--ruby-client-version X.Y.Z` or `X.Y.Z-rcN` to select the exact `valkey-glide-rb` release for Ruby benchmark cells. The default remains `1.0.0`.
+The Ruby client defaults to `latest`, which lets Bundler select the newest compatible stable `valkey-glide-rb` release. Use `--ruby-client-version X.Y.Z` or `X.Y.Z-rcN` to pin an exact release.
 
 > **Repo tag / known dependency.** The automation assumes the pinned
 > `--repo-tag` includes the Phase-0 correctness fixes (fail-loud runner, honest

@@ -29,11 +29,12 @@ Parameters:
 
   RubyClientVersion:
     Type: String
-    Default: 1.0.0
+    Default: latest
     Description: >-
-      Exact valkey-glide-rb version installed for Ruby benchmark cells.
-      Passed through to the Ruby Gemfile and recorded in run metadata.
-    AllowedPattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(-rc[0-9]+)?$"
+      valkey-glide-rb version installed for Ruby benchmark cells. Use latest
+      for the newest compatible stable release, or an exact version to pin it.
+      The requested value is recorded in run metadata.
+    AllowedPattern: "^(latest|[0-9]+\\.[0-9]+\\.[0-9]+(-rc[0-9]+)?)$"
 
   MatrixName:
     Type: String
@@ -266,7 +267,7 @@ Outputs:
     Value: !Ref JobId
 
   RubyClientVersion:
-    Description: Exact valkey-glide-rb version selected for Ruby benchmark cells.
+    Description: Requested valkey-glide-rb version or latest selector.
     Value: !Ref RubyClientVersion
 
   S3Prefix:
