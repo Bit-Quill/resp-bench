@@ -101,7 +101,7 @@ infra/aws/bench-aws.sh deploy \
   --runtime-cap 360
 ```
 
-The Ruby client defaults to `latest`, which lets Bundler select the newest compatible stable `valkey-glide-rb` release. Use `--ruby-client-version X.Y.Z` or `X.Y.Z-rcN` to pin an exact release.
+Ruby driver configs select the dependency through `specific_driver_config.gem_version`; an empty value lets Bundler install the latest compatible stable `valkey-glide-rb` release. Use `--ruby-client-version X.Y.Z` or `X.Y.Z-rcN` to override the configured version for every Ruby cell in an AWS run.
 
 > **Repo tag / known dependency.** The automation assumes the pinned
 > `--repo-tag` includes the Phase-0 correctness fixes (fail-loud runner, honest
@@ -115,8 +115,8 @@ The Ruby client defaults to `latest`, which lets Bundler select the newest compa
 ```
 runs/<job_id>/
   report.html          # interactive Plotly report (scalability + delta)
-  run-metadata.json    # job id, status, matrix, repo tag + git sha, client and
-                       #   Valkey versions, instance type / id / AZ / AMI, region, timing
+  run-metadata.json    # job id, status, matrix, repo tag + git sha, Valkey
+                       #   version, instance type / id / AZ / AMI, region, timing
   results/             # raw sweep output: *.ndjson, *.system.ndjson, _manifest.json
   graphs/              # generated graph assets
   logs/                # cloud-init-output.log (provision + run log)

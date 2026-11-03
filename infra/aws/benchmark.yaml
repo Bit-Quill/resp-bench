@@ -29,12 +29,12 @@ Parameters:
 
   RubyClientVersion:
     Type: String
-    Default: latest
+    Default: ""
     Description: >-
-      valkey-glide-rb version installed for Ruby benchmark cells. Use latest
-      for the newest compatible stable release, or an exact version to pin it.
-      The requested value is recorded in run metadata.
-    AllowedPattern: "^(latest|[0-9]+\\.[0-9]+\\.[0-9]+(-rc[0-9]+)?)$"
+      Optional valkey-glide-rb version override for Ruby benchmark cells.
+      When empty, each Ruby driver config selects its gem version; an empty
+      gem_version installs the latest compatible stable release.
+    AllowedPattern: "^$|^[0-9]+\\.[0-9]+\\.[0-9]+(-rc[0-9]+)?$"
 
   MatrixName:
     Type: String
@@ -193,8 +193,6 @@ Resources:
           Value: resp-bench
         - Key: RunId
           Value: !Ref JobId
-        - Key: RubyClientVersion
-          Value: !Ref RubyClientVersion
         - Key: Name
           Value: !Sub "resp-bench-${JobId}"
       # UserData is deliberately thin: install git, clone the fork at the pinned
@@ -267,7 +265,7 @@ Outputs:
     Value: !Ref JobId
 
   RubyClientVersion:
-    Description: Requested valkey-glide-rb version or latest selector.
+    Description: Optional valkey-glide-rb version override.
     Value: !Ref RubyClientVersion
 
   S3Prefix:

@@ -1,5 +1,3 @@
-"""Tests for the Ruby version input used by the AWS benchmark runner."""
-
 import os
 import subprocess
 from pathlib import Path
@@ -30,53 +28,62 @@ def test_aws_dry_run_passes_ruby_client_version_to_cloudformation():
     assert "RubyClientVersion=1.2.3-rc4" in result.stdout
 
 
-def test_aws_runner_defaults_to_latest_ruby_client_version():
-    result = subprocess.run(
-        [
-            AWS_RUNNER,
-            "deploy",
-            "--dry-run",
-        ],
+def test_ruby_build_uses_version_from_driver_config(tmp_path):
+    driver_config = tmp_path / "driver.json"
+    driver_config.write_text(
+        '{"specific_driver_config":{"gem_version":"2.3.4"}}',
+        encoding="utf-8",
+    )
+    capture_path = tmp_path / "version.txt"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    bundle = bin_dir / "bundle"
+    bundle.write_text(
+        '#!/usr/bin/env bash\nprintf "%s" "$VALKEY_GLIDE_RUBY_VERSION" > "$CAPTURE_PATH"\n',
+        encoding="utf-8",
+    )
+    bundle.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("VALKEY_GLIDE_RUBY_VERSION", None)
+    env["CAPTURE_PATH"] = str(capture_path)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+    subprocess.run(
+        ["make", "ruby-build", f"DRIVER={driver_config}"],
         cwd=REPO_ROOT,
+        env=env,
         check=True,
         capture_output=True,
         text=True,
     )
 
-    assert "RubyClientVersion=latest" in result.stdout
+    assert capture_path.read_text(encoding="utf-8") == "2.3.4"
 
 
 def test_ruby_gemfile_supports_latest_and_exact_versions():
     ruby_script = """
+    $requirements = []
     def source(*) = nil
     def gemspec(*) = nil
     def gem(name, *requirements)
-      puts requirements.first if name == "valkey-glide-rb"
+      $requirements << requirements if name == "valkey-glide-rb"
     end
     def group(*)
       yield
     end
+
+    ENV.delete("VALKEY_GLIDE_RUBY_VERSION")
     load ARGV.fetch(0)
+    ENV["VALKEY_GLIDE_RUBY_VERSION"] = "2.3.4"
+    load ARGV.fetch(0)
+    p $requirements
     """
-    latest_env = os.environ.copy()
-    latest_env.pop("VALKEY_GLIDE_RUBY_VERSION", None)
-    latest_result = subprocess.run(
+    result = subprocess.run(
         ["ruby", "-e", ruby_script, RUBY_GEMFILE],
         cwd=REPO_ROOT,
-        env=latest_env,
         check=True,
         capture_output=True,
         text=True,
     )
 
-    exact_result = subprocess.run(
-        ["ruby", "-e", ruby_script, RUBY_GEMFILE],
-        cwd=REPO_ROOT,
-        env=os.environ | {"VALKEY_GLIDE_RUBY_VERSION": "2.3.4"},
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    assert latest_result.stdout.strip() == ""
-    assert exact_result.stdout.strip() == "2.3.4"
+    assert result.stdout.strip() == '[[], ["2.3.4"]]'

@@ -11,8 +11,8 @@ gem "oj", "~> 3.16"             # Fast JSON serialization
 gem "concurrent-ruby", "~> 1.2" # Thread-safe data structures
 
 # valkey-glide-ruby client; supplies the `Valkey` class via `require "valkey"`.
-ruby_client_version = ENV.fetch("VALKEY_GLIDE_RUBY_VERSION", "latest")
-if ruby_client_version == "latest"
+ruby_client_version = ENV["VALKEY_GLIDE_RUBY_VERSION"].to_s
+if ruby_client_version.empty?
   gem "valkey-glide-rb"
 else
   gem "valkey-glide-rb", ruby_client_version

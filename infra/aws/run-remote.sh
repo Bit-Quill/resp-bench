@@ -25,9 +25,8 @@
 # pinned via AWS_REGION (us-east-1), never inherited from the ambient shell.
 #
 # Inputs (exported by UserData):
-#   JOB_ID, S3_BUCKET, MATRIX_NAME, REPO_TAG, VALKEY_GLIDE_RUBY_VERSION,
-#   RUNTIME_CAP_MINUTES, AWS_REGION, STACK_NAME, CFN_SIGNAL_RESOURCE,
-#   CFN_INSTANCE_ID, REPO_DIR
+#   JOB_ID, S3_BUCKET, MATRIX_NAME, REPO_TAG, RUNTIME_CAP_MINUTES,
+#   AWS_REGION, STACK_NAME, CFN_SIGNAL_RESOURCE, CFN_INSTANCE_ID, REPO_DIR
 
 set -uo pipefail
 
@@ -41,7 +40,6 @@ JOB_ID="${JOB_ID:?JOB_ID is required}"
 S3_BUCKET="${S3_BUCKET:-valkey-glide-resp-bench}"
 MATRIX_NAME="${MATRIX_NAME:-valkey-glide-basic-multiclients}"
 REPO_TAG="${REPO_TAG:-unknown}"
-VALKEY_GLIDE_RUBY_VERSION="${VALKEY_GLIDE_RUBY_VERSION:-latest}"
 RUNTIME_CAP_MINUTES="${RUNTIME_CAP_MINUTES:-180}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 STACK_NAME="${STACK_NAME:-}"
@@ -154,7 +152,6 @@ write_metadata() {
       --arg status "${status}" \
       --arg matrix "${MATRIX_NAME}" \
       --arg repo_tag "${REPO_TAG}" \
-      --arg valkey_glide_ruby_version "${VALKEY_GLIDE_RUBY_VERSION}" \
       --arg git_sha "${git_sha}" \
       --arg region "${AWS_REGION}" \
       --arg instance_id "${INSTANCE_ID}" \
@@ -172,15 +169,14 @@ write_metadata() {
         repo_tag: $repo_tag,
         git_sha: $git_sha,
         sweep_exit_code: $sweep_rc,
-        clients: { valkey_glide_ruby: { version: $valkey_glide_ruby_version } },
         server: { valkey_version: $valkey_version },
         aws: { region: $region, instance_id: $instance_id, instance_type: $instance_type, availability_zone: $az, ami_id: $ami_id },
         timing: { start: $start, end: $end }
       }' > "${METADATA_FILE}" 2>/dev/null || true
   else
     # Fallback if jq is somehow unavailable.
-    printf '{"job_id":"%s","status":"%s","matrix":"%s","repo_tag":"%s","git_sha":"%s","sweep_exit_code":"%s","clients":{"valkey_glide_ruby":{"version":"%s"}},"instance_type":"%s","availability_zone":"%s","ami_id":"%s","region":"%s","start":"%s","end":"%s"}\n' \
-      "${JOB_ID}" "${status}" "${MATRIX_NAME}" "${REPO_TAG}" "${git_sha}" "${SWEEP_RC}" "${VALKEY_GLIDE_RUBY_VERSION}" \
+    printf '{"job_id":"%s","status":"%s","matrix":"%s","repo_tag":"%s","git_sha":"%s","sweep_exit_code":"%s","instance_type":"%s","availability_zone":"%s","ami_id":"%s","region":"%s","start":"%s","end":"%s"}\n' \
+      "${JOB_ID}" "${status}" "${MATRIX_NAME}" "${REPO_TAG}" "${git_sha}" "${SWEEP_RC}" \
       "${INSTANCE_TYPE}" "${AVAILABILITY_ZONE}" "${AMI_ID}" "${AWS_REGION}" "${START_TS}" "${end_ts}" \
       > "${METADATA_FILE}"
   fi

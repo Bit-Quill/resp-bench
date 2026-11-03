@@ -25,7 +25,8 @@
 #   --repo-url <url>        Fork URL (default: Bit-Quill/resp-bench).
 #   --runtime-cap <min>     Hard runtime cap in minutes (default: 180).
 #   --bucket <name>         Destination bucket (default: valkey-glide-resp-bench).
-#   --ruby-client-version   valkey-glide-rb version or latest (default: latest).
+#   --ruby-client-version <version>
+#                           Override the Ruby driver config's gem version.
 #   --job-id-prefix <p>     Prefix the job id (e.g. nightly, pr-123).
 #   --dry-run               Print the resolved deploy command + S3 prefix; do
 #                           not call AWS.
@@ -48,7 +49,7 @@ REPO_TAG="main"
 REPO_URL="https://github.com/Bit-Quill/resp-bench.git"
 RUNTIME_CAP="180"
 BUCKET="valkey-glide-resp-bench"
-RUBY_CLIENT_VERSION="latest"
+RUBY_CLIENT_VERSION=""
 JOB_ID_PREFIX=""
 DRY_RUN=0
 
@@ -92,8 +93,10 @@ cmd_deploy() {
   done
 
   [ -f "${TEMPLATE}" ] || die "template not found: ${TEMPLATE}"
-  [[ "${RUBY_CLIENT_VERSION}" =~ ^(latest|[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?)$ ]] \
-    || die "invalid Ruby client version: ${RUBY_CLIENT_VERSION} (expected latest, X.Y.Z, or X.Y.Z-rcN)"
+  if [ -n "${RUBY_CLIENT_VERSION}" ] \
+    && [[ ! "${RUBY_CLIENT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+    die "invalid Ruby client version: ${RUBY_CLIENT_VERSION} (expected X.Y.Z or X.Y.Z-rcN)"
+  fi
 
   local job_id stack_name s3_prefix
   job_id="$(generate_job_id)"
@@ -102,6 +105,19 @@ cmd_deploy() {
 
   # Build the deploy argv (kept as an array so the dry-run prints exactly what
   # would run).
+  local -a parameter_overrides=(
+    "JobId=${job_id}"
+    "MatrixName=${MATRIX}"
+    "InstanceType=${INSTANCE_TYPE}"
+    "RepoTag=${REPO_TAG}"
+    "RepoUrl=${REPO_URL}"
+    "RuntimeCapMinutes=${RUNTIME_CAP}"
+    "S3Bucket=${BUCKET}"
+  )
+  if [ -n "${RUBY_CLIENT_VERSION}" ]; then
+    parameter_overrides+=("RubyClientVersion=${RUBY_CLIENT_VERSION}")
+  fi
+
   local -a deploy_cmd=(
     aws cloudformation deploy
     --region "${REGION}"
@@ -109,15 +125,7 @@ cmd_deploy() {
     --template-file "${TEMPLATE}"
     --capabilities CAPABILITY_IAM
     --tags Project=resp-bench "RunId=${job_id}"
-    --parameter-overrides
-      "JobId=${job_id}"
-      "MatrixName=${MATRIX}"
-      "InstanceType=${INSTANCE_TYPE}"
-      "RepoTag=${REPO_TAG}"
-      "RepoUrl=${REPO_URL}"
-      "RuntimeCapMinutes=${RUNTIME_CAP}"
-      "S3Bucket=${BUCKET}"
-      "RubyClientVersion=${RUBY_CLIENT_VERSION}"
+    --parameter-overrides "${parameter_overrides[@]}"
   )
 
   if [ "${DRY_RUN}" -eq 1 ]; then
