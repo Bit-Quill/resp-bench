@@ -28,7 +28,9 @@ Gem::Specification.new do |spec|
   spec.add_dependency "valkey-glide-rb", "~> 1.0"
   spec.add_dependency "async", "~> 2.6"
   spec.add_dependency "async-redis", "~> 0.8"
+  spec.add_dependency "base64"
   spec.add_dependency "HDRHistogram", "~> 0.1"
+  spec.add_dependency "logger"
   spec.add_dependency "oj", "~> 3.16"
   spec.add_dependency "concurrent-ruby", "~> 1.2"
 end
