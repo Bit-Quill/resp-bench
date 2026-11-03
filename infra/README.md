@@ -96,9 +96,12 @@ Results will appear at: s3://valkey-glide-resp-bench/runs/bench-.../
 infra/aws/bench-aws.sh deploy \
   --matrix driver-comparison-defaults \
   --instance-type m5.metal \
+  --ruby-client-version 1.2.3 \
   --repo-tag v0.1.0-phase0 \
   --runtime-cap 360
 ```
+
+Use `--ruby-client-version X.Y.Z` or `X.Y.Z-rcN` to select the exact `valkey-glide-rb` release for Ruby benchmark cells. The default remains `1.0.0`.
 
 > **Repo tag / known dependency.** The automation assumes the pinned
 > `--repo-tag` includes the Phase-0 correctness fixes (fail-loud runner, honest
@@ -112,8 +115,8 @@ infra/aws/bench-aws.sh deploy \
 ```
 runs/<job_id>/
   report.html          # interactive Plotly report (scalability + delta)
-  run-metadata.json    # job id, status, matrix, repo tag + git sha, Valkey
-                       #   version, instance type / id / AZ / AMI, region, timing
+  run-metadata.json    # job id, status, matrix, repo tag + git sha, client and
+                       #   Valkey versions, instance type / id / AZ / AMI, region, timing
   results/             # raw sweep output: *.ndjson, *.system.ndjson, _manifest.json
   graphs/              # generated graph assets
   logs/                # cloud-init-output.log (provision + run log)

@@ -25,6 +25,7 @@
 #   --repo-url <url>        Fork URL (default: Bit-Quill/resp-bench).
 #   --runtime-cap <min>     Hard runtime cap in minutes (default: 180).
 #   --bucket <name>         Destination bucket (default: valkey-glide-resp-bench).
+#   --ruby-client-version   Exact valkey-glide-rb version (default: 1.0.0).
 #   --job-id-prefix <p>     Prefix the job id (e.g. nightly, pr-123).
 #   --dry-run               Print the resolved deploy command + S3 prefix; do
 #                           not call AWS.
@@ -47,6 +48,7 @@ REPO_TAG="main"
 REPO_URL="https://github.com/Bit-Quill/resp-bench.git"
 RUNTIME_CAP="180"
 BUCKET="valkey-glide-resp-bench"
+RUBY_CLIENT_VERSION="1.0.0"
 JOB_ID_PREFIX=""
 DRY_RUN=0
 
@@ -81,6 +83,7 @@ cmd_deploy() {
       --repo-url)      REPO_URL="$2"; shift 2 ;;
       --runtime-cap)   RUNTIME_CAP="$2"; shift 2 ;;
       --bucket)        BUCKET="$2"; shift 2 ;;
+      --ruby-client-version) RUBY_CLIENT_VERSION="$2"; shift 2 ;;
       --job-id-prefix) JOB_ID_PREFIX="$2"; shift 2 ;;
       --dry-run)       DRY_RUN=1; shift ;;
       -h|--help)       usage; exit 0 ;;
@@ -89,6 +92,8 @@ cmd_deploy() {
   done
 
   [ -f "${TEMPLATE}" ] || die "template not found: ${TEMPLATE}"
+  [[ "${RUBY_CLIENT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] \
+    || die "invalid Ruby client version: ${RUBY_CLIENT_VERSION} (expected X.Y.Z or X.Y.Z-rcN)"
 
   local job_id stack_name s3_prefix
   job_id="$(generate_job_id)"
@@ -112,6 +117,7 @@ cmd_deploy() {
       "RepoUrl=${REPO_URL}"
       "RuntimeCapMinutes=${RUNTIME_CAP}"
       "S3Bucket=${BUCKET}"
+      "RubyClientVersion=${RUBY_CLIENT_VERSION}"
   )
 
   if [ "${DRY_RUN}" -eq 1 ]; then
