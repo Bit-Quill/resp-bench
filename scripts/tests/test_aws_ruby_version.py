@@ -17,7 +17,7 @@ def test_aws_dry_run_passes_ruby_client_version_to_cloudformation():
             "deploy",
             "--dry-run",
             "--matrix",
-            "valkey-glide-ruby-30min",
+            "valkey-glide-basic-multiclients",
             "--ruby-client-version",
             "1.2.3-rc4",
         ],
