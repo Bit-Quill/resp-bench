@@ -387,11 +387,7 @@ rust-clean:
 # ============================================================================
 
 ruby-build:
-	@ruby_client_version="$${VALKEY_GLIDE_RUBY_VERSION:-}"; \
-	if [ -z "$$ruby_client_version" ] && [ -n "$(DRIVER)" ]; then \
-		ruby_client_version="$$(ruby -rjson -e 'config = JSON.parse(File.read(ARGV.fetch(0))); print config.dig("specific_driver_config", "gem_version").to_s' "$(DRIVER)")"; \
-	fi; \
-	cd ruby && VALKEY_GLIDE_RUBY_VERSION="$$ruby_client_version" bundle install
+	cd ruby && bundle install
 
 ruby-test:
 	cd ruby && bundle exec rake test

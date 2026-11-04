@@ -103,7 +103,7 @@ infra/aws/bench-aws.sh deploy \
   --runtime-cap 360
 ```
 
-Ruby driver configs select the dependency through `specific_driver_config.gem_version`; an empty value lets Bundler install the latest compatible stable `valkey-glide-rb` release. Use `--ruby-client-version X.Y.Z` or `X.Y.Z-rcN` to override the configured version for every Ruby cell in an AWS run.
+Ruby version selection uses only `VALKEY_GLIDE_RUBY_VERSION`. Use `--ruby-client-version X.Y.Z` or `X.Y.Z-rcN` to set it for every Ruby cell in an AWS run. When it is unset, the Gemfile leaves `valkey-glide-rb` unconstrained and Bundler installs the latest compatible stable release.
 
 ## Deploying the Ruby release trigger
 

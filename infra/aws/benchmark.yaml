@@ -31,9 +31,9 @@ Parameters:
     Type: String
     Default: ""
     Description: >-
-      Optional valkey-glide-rb version override for Ruby benchmark cells.
-      When empty, each Ruby driver config selects its gem version; an empty
-      gem_version installs the latest compatible stable release.
+      Optional valkey-glide-rb version exported as
+      VALKEY_GLIDE_RUBY_VERSION. When empty, the Gemfile leaves the dependency
+      unconstrained and Bundler installs the latest compatible stable release.
     AllowedPattern: "^$|^[0-9]+\\.[0-9]+\\.[0-9]+(-rc[0-9]+)?$"
 
   MatrixName:

@@ -26,7 +26,7 @@
 #   --runtime-cap <min>     Hard runtime cap in minutes (default: 180).
 #   --bucket <name>         Destination bucket (default: valkey-glide-resp-bench).
 #   --ruby-client-version <version>
-#                           Override the Ruby driver config's gem version.
+#                           Set VALKEY_GLIDE_RUBY_VERSION for Ruby benchmarks.
 #   --job-id-prefix <p>     Prefix the job id (e.g. nightly, pr-123).
 #   --dry-run               Print the resolved deploy command + S3 prefix; do
 #                           not call AWS.

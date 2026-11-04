@@ -3,7 +3,5 @@
   "description": "valkey-glide-ruby client - standalone mode",
   "driver_id": "valkey-glide-ruby",
   "mode": "standalone",
-  "specific_driver_config": {
-    "gem_version": ""
-  }
+  "specific_driver_config": {}
 }
