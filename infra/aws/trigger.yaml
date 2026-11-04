@@ -1,0 +1,451 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  Private Ruby RESPBench trigger - GitHub OIDC invokes one Lambda that starts
+  a benchmark CloudFormation stack from an S3 template and returns immediately
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  "com.aws.cloudformation.Context":
+    arch: GitHub OIDC -> invoke-only role -> Lambda -> S3 runner template -> CloudFormation stack
+    must:
+      - Lambda has no public endpoint; invocation requires SigV4 + IAM
+      - GitHub trust is limited to release tags and main for the configured repository
+    ref:
+      - at: infra/README.md
+        has: trigger deployment + invocation contract
+        scope: trigger
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: valkey-io/valkey-glide-ruby
+    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    Description: GitHub owner/repository permitted to assume the invoke-only role.
+
+  TriggerFunctionName:
+    Type: String
+    Default: resp-bench-trigger-ruby
+    AllowedPattern: "^[A-Za-z0-9_-]+$"
+    MaxLength: 64
+    Description: Stable function name invoked by the Ruby CD workflow.
+
+  TemplateBucket:
+    Type: String
+    Default: valkey-glide-resp-bench
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+    Description: Private S3 bucket containing the runner template and Lambda package.
+
+  TemplateKey:
+    Type: String
+    Default: templates/benchmark.yaml
+    AllowedValues:
+      - templates/benchmark.yaml
+    Description: Unversioned S3 key read on every invocation.
+
+  ResultsBucket:
+    Type: String
+    Default: valkey-glide-resp-bench
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+    Description: Private S3 bucket where benchmark stacks write results.
+
+  BenchmarkRepoUrl:
+    Type: String
+    Default: https://github.com/Bit-Quill/resp-bench.git
+    AllowedPattern: "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\.git$"
+    Description: Public RESPBench repository cloned by benchmark instances.
+
+  BenchmarkRepoTag:
+    Type: String
+    Default: main
+    AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"
+    Description: RESPBench branch, tag, or commit used by benchmark instances.
+
+Resources:
+  BenchmarkExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      "com.aws.cloudformation.Context":
+        why: CloudFormation service role isolates runner provisioning from Lambda
+        must:
+          - Pass only to CloudFormation
+          - IAM resources stay under the resp-bench-* stack-name prefix
+        mutable: review-required
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ManageBenchmarkRunner
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ResolveAmazonLinuxAmi
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::parameter/aws/service/ami-amazon-linux-latest/*"
+              - Sid: ManageBenchmarkCompute
+                Effect: Allow
+                Action:
+                  - ec2:AssociateIamInstanceProfile
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:CreateSecurityGroup
+                  - ec2:CreateTags
+                  - ec2:DeleteSecurityGroup
+                  - ec2:DeleteTags
+                  - ec2:DescribeAccountAttributes
+                  - ec2:DescribeAvailabilityZones
+                  - ec2:DescribeIamInstanceProfileAssociations
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstanceAttribute
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeTags
+                  - ec2:DescribeVolumeStatus
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeVpcs
+                  - ec2:DisassociateIamInstanceProfile
+                  - ec2:ModifyInstanceAttribute
+                  - ec2:ReplaceIamInstanceProfileAssociation
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:RunInstances
+                  - ec2:TerminateInstances
+                Resource: "*"
+              - Sid: ManageBenchmarkRole
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListRolePolicies
+                  - iam:ListRoleTags
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/resp-bench-*"
+              - Sid: ManageBenchmarkInstanceProfile
+                Effect: Allow
+                Action:
+                  - iam:AddRoleToInstanceProfile
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:TagInstanceProfile
+                  - iam:UntagInstanceProfile
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/resp-bench-*"
+              - Sid: PassBenchmarkRoleToEc2
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/resp-bench-*"
+                Condition:
+                  StringEquals:
+                    "iam:PassedToService": ec2.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: resp-bench
+        - Key: Client
+          Value: ruby
+
+  TriggerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Metadata:
+      "com.aws.cloudformation.Context":
+        why: keeps trigger logs for 30 days; deleted with the trigger stack
+        must: []
+        mutable: free-to-tune
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${TriggerFunctionName}"
+      RetentionInDays: 30
+
+  TriggerExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      "com.aws.cloudformation.Context":
+        why: Lambda reads one template and creates one prefixed stack through a service role
+        must:
+          - S3 read is limited to templates/benchmark.yaml
+          - PassRole is limited to the benchmark CloudFormation role
+        mutable: review-required
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartRubyBenchmark
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteFunctionLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${TriggerFunctionName}:*"
+              - Sid: ReadRunnerTemplate
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${TemplateBucket}/${TemplateKey}"
+              - Sid: CreateBenchmarkStack
+                Effect: Allow
+                Action: cloudformation:CreateStack
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/resp-bench-*/*"
+              - Sid: PassBenchmarkExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt BenchmarkExecutionRole.Arn
+                Condition:
+                  StringEquals:
+                    "iam:PassedToService": cloudformation.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: resp-bench
+        - Key: Client
+          Value: ruby
+
+  TriggerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - TriggerLogGroup
+    Metadata:
+      "com.aws.cloudformation.Context":
+        why: validates release inputs, submits CreateStack, and returns without polling
+        must:
+          - No Function URL or API Gateway event
+          - Propagate AWS failures so GitHub sees a failed trigger
+          - Matrix names cannot contain paths
+        mutable: change-with-constraints
+        mutability:
+          FunctionName: must-never-change
+    Properties:
+      FunctionName: !Ref TriggerFunctionName
+      Description: Starts a Ruby RESPBench stack and returns its stack id.
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      Handler: index.lambda_handler
+      Role: !GetAtt TriggerExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      Environment:
+        Variables:
+          TEMPLATE_BUCKET: !Ref TemplateBucket
+          TEMPLATE_KEY: !Ref TemplateKey
+          RESULTS_BUCKET: !Ref ResultsBucket
+          BENCHMARK_REPO_URL: !Ref BenchmarkRepoUrl
+          BENCHMARK_REPO_TAG: !Ref BenchmarkRepoTag
+          BENCHMARK_ROLE_ARN: !GetAtt BenchmarkExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import os
+          import re
+
+          import boto3
+          from botocore.config import Config
+
+
+          VERSION_PATTERN = re.compile(
+              r"^[0-9]{1,10}\.[0-9]{1,10}\.[0-9]{1,10}(?:-rc[0-9]{1,10})?$"
+          )
+          MATRIX_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+          GITHUB_RUN_ID_PATTERN = re.compile(r"^[0-9]{1,20}$")
+          GITHUB_RUN_ATTEMPT_PATTERN = re.compile(r"^[0-9]{1,6}$")
+          TEMPLATE_BODY_LIMIT = 51_200
+
+          AWS_CONFIG = Config(
+              retries={"total_max_attempts": 3, "mode": "standard"},
+              connect_timeout=5,
+              read_timeout=10,
+          )
+          S3 = boto3.client("s3", config=AWS_CONFIG)
+          CLOUDFORMATION = boto3.client("cloudformation", config=AWS_CONFIG)
+
+
+          def required_value(event, name, pattern, expected):
+              value = event.get(name)
+              if not isinstance(value, str) or not pattern.fullmatch(value):
+                  raise ValueError(f"{name} must {expected}")
+              return value
+
+
+          def lambda_handler(event, context):
+              if not isinstance(event, dict):
+                  raise ValueError("event must be a JSON object")
+
+              ruby_version = required_value(
+                  event,
+                  "ruby_client_version",
+                  VERSION_PATTERN,
+                  "match X.Y.Z or X.Y.Z-rcN",
+              )
+              matrix_name = required_value(
+                  event,
+                  "matrix_name",
+                  MATRIX_PATTERN,
+                  "be a RESPBench matrix name",
+              )
+              github_run_id = required_value(
+                  event,
+                  "github_run_id",
+                  GITHUB_RUN_ID_PATTERN,
+                  "contain only digits",
+              )
+              github_run_attempt = required_value(
+                  event,
+                  "github_run_attempt",
+                  GITHUB_RUN_ATTEMPT_PATTERN,
+                  "contain only digits",
+              )
+
+              template_object = S3.get_object(
+                  Bucket=os.environ["TEMPLATE_BUCKET"],
+                  Key=os.environ["TEMPLATE_KEY"],
+              )
+              with template_object["Body"] as body:
+                  template_bytes = body.read()
+              if len(template_bytes) > TEMPLATE_BODY_LIMIT:
+                  raise ValueError(
+                      "benchmark template exceeds the CloudFormation TemplateBody limit"
+                  )
+              template_body = template_bytes.decode("utf-8")
+
+              version_slug = ruby_version.replace(".", "-")
+              request_suffix = context.aws_request_id.replace("-", "")[:8]
+              job_id = (
+                  f"ruby-{version_slug}-{github_run_id[-12:]}-"
+                  f"{github_run_attempt}-{request_suffix}"
+              )
+              stack_name = f"resp-bench-{job_id}"
+
+              response = CLOUDFORMATION.create_stack(
+                  StackName=stack_name,
+                  TemplateBody=template_body,
+                  Parameters=[
+                      {"ParameterKey": "JobId", "ParameterValue": job_id},
+                      {
+                          "ParameterKey": "RubyClientVersion",
+                          "ParameterValue": ruby_version,
+                      },
+                      {"ParameterKey": "MatrixName", "ParameterValue": matrix_name},
+                      {
+                          "ParameterKey": "S3Bucket",
+                          "ParameterValue": os.environ["RESULTS_BUCKET"],
+                      },
+                      {
+                          "ParameterKey": "RepoUrl",
+                          "ParameterValue": os.environ["BENCHMARK_REPO_URL"],
+                      },
+                      {
+                          "ParameterKey": "RepoTag",
+                          "ParameterValue": os.environ["BENCHMARK_REPO_TAG"],
+                      },
+                  ],
+                  Capabilities=["CAPABILITY_IAM"],
+                  RoleARN=os.environ["BENCHMARK_ROLE_ARN"],
+                  OnFailure="ROLLBACK",
+                  TimeoutInMinutes=240,
+                  ClientRequestToken=context.aws_request_id,
+                  Tags=[
+                      {"Key": "Project", "Value": "resp-bench"},
+                      {"Key": "Client", "Value": "ruby"},
+                      {"Key": "ClientVersion", "Value": ruby_version},
+                      {"Key": "Matrix", "Value": matrix_name},
+                      {"Key": "GitHubRunId", "Value": github_run_id},
+                  ],
+              )
+
+              return {
+                  "stack_id": response["StackId"],
+                  "stack_name": stack_name,
+                  "job_id": job_id,
+                  "matrix_name": matrix_name,
+                  "ruby_client_version": ruby_version,
+                  "s3_prefix": (
+                      f"s3://{os.environ['RESULTS_BUCKET']}/runs/{job_id}/"
+                  ),
+                  "template_etag": template_object.get("ETag", "").strip('"'),
+              }
+      Tags:
+        - Key: Project
+          Value: resp-bench
+        - Key: Client
+          Value: ruby
+
+  GitHubInvokeRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      "com.aws.cloudformation.Context":
+        why: short-lived GitHub OIDC credentials can invoke only the Ruby trigger
+        must:
+          - Trust only release tags and main for the configured repository
+          - Grant no S3, CloudFormation, IAM, or benchmark permissions
+        mutable: review-required
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+              StringLike:
+                "token.actions.githubusercontent.com:sub":
+                  - !Sub "repo:${GitHubRepository}:ref:refs/tags/v*"
+                  - !Sub "repo:${GitHubRepository}:ref:refs/heads/main"
+      Policies:
+        - PolicyName: InvokeRubyBenchmarkTrigger
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt TriggerFunction.Arn
+      Tags:
+        - Key: Project
+          Value: resp-bench
+        - Key: Client
+          Value: ruby
+
+Outputs:
+  TriggerFunctionName:
+    Description: Lambda function invoked by the Ruby CD workflow.
+    Value: !Ref TriggerFunction
+
+  TriggerFunctionArn:
+    Description: ARN of the private Ruby RESPBench trigger.
+    Value: !GetAtt TriggerFunction.Arn
+
+  GitHubRoleArn:
+    Description: Store this value in the Ruby repository AWS_ROLE_ARN Actions secret.
+    Value: !GetAtt GitHubInvokeRole.Arn
+
+  TemplateObject:
+    Description: Unversioned S3 object read for each benchmark launch.
+    Value: !Sub "s3://${TemplateBucket}/${TemplateKey}"

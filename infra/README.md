@@ -13,8 +13,10 @@ infra/
 ├── provision.sh          # cloud-agnostic toolchain install + engine build + cache warm-up
 ├── aws/
 │   ├── benchmark.yaml     # CloudFormation: EC2 + SG + IAM role/profile + UserData + CreationPolicy
+│   ├── trigger.yaml       # private Lambda + GitHub OIDC invoke role
 │   ├── run-remote.sh      # on-instance job runner (server → signal → sweep → report → S3 → self-terminate)
-│   └── bench-aws.sh       # thin driver: generate job id → deploy → print S3 prefix → exit
+│   ├── bench-aws.sh       # thin driver: generate job id → deploy → print S3 prefix → exit
+│   └── deploy-trigger.sh  # upload runner template + deploy or update the Lambda trigger
 └── README.md
 ```
 
@@ -96,9 +98,45 @@ Results will appear at: s3://valkey-glide-resp-bench/runs/bench-.../
 infra/aws/bench-aws.sh deploy \
   --matrix driver-comparison-defaults \
   --instance-type m5.metal \
+  --ruby-client-version 1.2.3 \
   --repo-tag v0.1.0-phase0 \
   --runtime-cap 360
 ```
+
+Ruby version selection uses only `VALKEY_GLIDE_RUBY_VERSION`. Use `--ruby-client-version X.Y.Z` or `X.Y.Z-rcN` to set it for every Ruby cell in an AWS run. When it is unset, the Gemfile leaves `valkey-glide-rb` unconstrained and Bundler installs the latest compatible stable release.
+
+## Deploying the Ruby release trigger
+
+The Ruby release workflow can invoke a private Lambda instead of checking out RESPBench. The Lambda accepts the released gem version and a matrix name, reads the runner template from S3, submits a benchmark stack, and returns as soon as CloudFormation accepts `CreateStack`.
+
+The artifact bucket must already exist, remain private, and be in the selected region. The deploy script overwrites the unversioned `templates/benchmark.yaml` object, then uses CloudFormation to create or update the inline Lambda:
+
+```
+infra/aws/deploy-trigger.sh \
+  --template-bucket valkey-glide-resp-bench \
+  --results-bucket valkey-glide-resp-bench \
+  --repo-tag main
+```
+
+The command creates or updates the `resp-bench-ruby-trigger` stack and prints two outputs:
+
+- `Function` is the private Lambda name used by `aws lambda invoke`.
+- `GitHub role ARN` is stored as the Ruby repository's `AWS_ROLE_ARN` Actions secret.
+
+The AWS account must already have the `token.actions.githubusercontent.com` IAM OIDC provider. The generated role trusts only release tags and the `main` branch of `valkey-io/valkey-glide-ruby`, and it can invoke only the trigger Lambda.
+
+The matrix must exist in the selected RESPBench ref and include a Ruby driver. This PR does not add a release-specific matrix. The invocation payload is:
+
+```json
+{
+  "ruby_client_version": "1.2.3",
+  "matrix_name": "<ruby-matrix>",
+  "github_run_id": "123456789",
+  "github_run_attempt": "1"
+}
+```
+
+The synchronous response contains the stack ID, job ID, selected matrix and version, and result prefix. It does not wait for provisioning or benchmark results.
 
 > **Repo tag / known dependency.** The automation assumes the pinned
 > `--repo-tag` includes the Phase-0 correctness fixes (fail-loud runner, honest
@@ -152,8 +190,7 @@ or the convenience wrapper:
 infra/aws/bench-aws.sh delete resp-bench-<job_id>
 ```
 
-> There is intentionally **no watchdog Lambda** or auto-teardown. `delete-stack`
-> is a deliberate, documented manual step.
+The trigger Lambda does not monitor or tear down runner stacks. `delete-stack` remains a deliberate manual step.
 
 To list every leftover shell:
 

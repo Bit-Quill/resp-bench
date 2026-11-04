@@ -10,6 +10,10 @@ Description: >-
   only leftover is this stack's free shell (security group + IAM role); remove
   it with `aws cloudformation delete-stack` (see infra/README.md).
 
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Parameters
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,6 +26,15 @@ Parameters:
       [prefix-]bench-YYYYMMDD-HHMMSS-<6 random>. Used as the S3 prefix
       (runs/<JobId>/) and the RunId tag.
     AllowedPattern: "^[a-zA-Z0-9._-]+$"
+
+  RubyClientVersion:
+    Type: String
+    Default: ""
+    Description: >-
+      Optional valkey-glide-rb version exported as
+      VALKEY_GLIDE_RUBY_VERSION. When empty, the Gemfile leaves the dependency
+      unconstrained and Bundler installs the latest compatible stable release.
+    AllowedPattern: "^$|^[0-9]+\\.[0-9]+\\.[0-9]+(-rc[0-9]+)?$"
 
   MatrixName:
     Type: String
@@ -224,6 +237,7 @@ Resources:
 
           # Cloud-agnostic toolchain install + engine build + cache warm-up.
           export REPO_DIR
+          export VALKEY_GLIDE_RUBY_VERSION="${RubyClientVersion}"
           bash "$REPO_DIR/infra/provision.sh"
 
           # Provisioning succeeded; hand off. The run script sends the
@@ -233,6 +247,7 @@ Resources:
           export S3_BUCKET="${S3Bucket}"
           export MATRIX_NAME="${MatrixName}"
           export REPO_TAG="${RepoTag}"
+          export VALKEY_GLIDE_RUBY_VERSION="${RubyClientVersion}"
           export RUNTIME_CAP_MINUTES="${RuntimeCapMinutes}"
           export AWS_REGION="$REGION"
           export STACK_NAME
@@ -248,6 +263,10 @@ Outputs:
   JobId:
     Description: The run id / S3 prefix segment.
     Value: !Ref JobId
+
+  RubyClientVersion:
+    Description: Optional valkey-glide-rb version override.
+    Value: !Ref RubyClientVersion
 
   S3Prefix:
     Description: Where results will appear.
