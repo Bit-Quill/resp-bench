@@ -107,13 +107,48 @@ infra/aws/bench-aws.sh deploy \
 > `valkey-cli`). That is expected and out of scope here: the run still uploads a
 > diagnosable bundle and self-terminates.
 
+### Selecting a Ruby GLIDE version
+
+`--ruby-client-version <version>` picks the exact `valkey-glide-rb` gem the
+instance installs (default `1.0.0`). It flows through the `RubyClientVersion`
+stack parameter into the instance as `VALKEY_GLIDE_RUBY_VERSION`, which
+`ruby/Gemfile` pins exactly. One run uses one version; to compare versions,
+launch separate runs with the same matrix, instance type, and workload.
+
+```
+infra/aws/bench-aws.sh deploy \
+  --matrix ruby-glide-version-smoke \
+  --ruby-client-version 1.1.0.pre.rc2 \
+  --repo-tag <pushed-branch-or-tag>
+```
+
+- **Use a Ruby matrix.** The option only affects matrices that select the
+  `valkey-glide-ruby` driver (e.g. `ruby-glide-version-smoke`); the default
+  matrix runs Java GLIDE and ignores it.
+- **The `--repo-tag` must contain this feature** (and be pushed to
+  `--repo-url`): the instance clones that ref, so local, uncommitted, or
+  unpushed changes are invisible to it.
+- **Use the RubyGems version string** (`1.1.0.pre.rc2`, not `1.1.0-rc2`). List
+  what's published, prereleases included, with
+  `gem list --remote --all --prerelease valkey-glide-rb`.
+- The value is validated before any AWS call (and again by the template's
+  `AllowedPattern`): dot/hyphen-separated alphanumeric segments only.
+- **Where to confirm it:** each result line in `results/*.ndjson` reports the
+  installed version as `metadata.primary_driver_version`; `run-metadata.json`
+  records `clients.valkey_glide_ruby.requested` and `.resolved` (from
+  `ruby/Gemfile.lock`); the stack outputs include `RubyClientVersion`.
+
+Locally, the same variable drives the Ruby engine:
+`VALKEY_GLIDE_RUBY_VERSION=1.1.0.pre.rc2 make ruby-build`.
+
 ## What lands in S3
 
 ```
 runs/<job_id>/
   report.html          # interactive Plotly report (scalability + delta)
   run-metadata.json    # job id, status, matrix, repo tag + git sha, Valkey
-                       #   version, instance type / id / AZ / AMI, region, timing
+                       #   version, Ruby GLIDE requested/resolved version,
+                       #   instance type / id / AZ / AMI, region, timing
   results/             # raw sweep output: *.ndjson, *.system.ndjson, _manifest.json
   graphs/              # generated graph assets
   logs/                # cloud-init-output.log (provision + run log)

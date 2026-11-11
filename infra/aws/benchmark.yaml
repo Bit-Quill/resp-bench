@@ -10,6 +10,10 @@ Description: >-
   only leftover is this stack's free shell (security group + IAM role); remove
   it with `aws cloudformation delete-stack` (see infra/README.md).
 
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Parameters
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,6 +73,23 @@ Parameters:
     Description: >-
       Destination S3 bucket. Results land under s3://<bucket>/runs/<JobId>/.
       The instance role is scoped to s3:PutObject on runs/* of this bucket only.
+
+  RubyClientVersion:
+    Type: String
+    Default: "1.0.0"
+    Description: >-
+      Exact valkey-glide-rb gem version installed on the instance (exported as
+      VALKEY_GLIDE_RUBY_VERSION, consumed by ruby/Gemfile). Accepts RubyGems
+      prerelease forms such as 1.1.0.pre.rc2. Only affects matrices that
+      select the valkey-glide-ruby driver.
+    # Dot/hyphen-separated alphanumeric segments only — no spaces, quotes,
+    # shell metacharacters, or slashes, so the value is safe to interpolate
+    # into UserData. Keep in sync with RUBY_CLIENT_VERSION_PATTERN in
+    # bench-aws.sh.
+    AllowedPattern: "^[0-9A-Za-z]+([.-][0-9A-Za-z]+)*$"
+    ConstraintDescription: >-
+      must be a gem version made of dot/hyphen-separated alphanumeric segments
+      (e.g. 1.0.0 or 1.1.0.pre.rc2).
 
   BaseAmiId:
     Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
@@ -222,6 +243,12 @@ Resources:
           REPO_DIR=/opt/resp-bench
           git clone --depth 1 --branch "${RepoTag}" "${RepoUrl}" "$REPO_DIR"
 
+          # Selected Ruby GLIDE gem version. Exported BEFORE provision.sh (whose
+          # Ruby warm-up runs `bundle install`) and inherited by run-remote.sh
+          # (where `make ruby-run` re-runs ruby-build), so both resolve the same
+          # exact version. AllowedPattern restricts it to safe characters.
+          export VALKEY_GLIDE_RUBY_VERSION="${RubyClientVersion}"
+
           # Cloud-agnostic toolchain install + engine build + cache warm-up.
           export REPO_DIR
           bash "$REPO_DIR/infra/provision.sh"
@@ -252,6 +279,10 @@ Outputs:
   S3Prefix:
     Description: Where results will appear.
     Value: !Sub "s3://${S3Bucket}/runs/${JobId}/"
+
+  RubyClientVersion:
+    Description: Requested valkey-glide-rb gem version (only used by Ruby GLIDE matrices).
+    Value: !Ref RubyClientVersion
 
   InstanceId:
     Description: The (self-terminating) benchmark instance.

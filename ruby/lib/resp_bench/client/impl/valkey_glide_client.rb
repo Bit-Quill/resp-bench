@@ -76,8 +76,10 @@ module RespBench
         end
 
         def driver_version
-          # The Gemfile pins an exact released version of valkey-glide-rb.
-          Valkey::VERSION
+          # Report the installed gem version (e.g. "1.1.0.pre.rc2"), i.e. the
+          # exact value the Gemfile pinned. Valkey::VERSION can use a different
+          # spelling for prereleases ("1.1.0-rc2"), so it is only a fallback.
+          Gem.loaded_specs["valkey-glide-rb"]&.version&.to_s || Valkey::VERSION
         end
 
         private

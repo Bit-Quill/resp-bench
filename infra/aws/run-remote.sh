@@ -26,7 +26,9 @@
 #
 # Inputs (exported by UserData):
 #   JOB_ID, S3_BUCKET, MATRIX_NAME, REPO_TAG, RUNTIME_CAP_MINUTES,
-#   AWS_REGION, STACK_NAME, CFN_SIGNAL_RESOURCE, CFN_INSTANCE_ID, REPO_DIR
+#   AWS_REGION, STACK_NAME, CFN_SIGNAL_RESOURCE, CFN_INSTANCE_ID, REPO_DIR,
+#   VALKEY_GLIDE_RUBY_VERSION (consumed by ruby/Gemfile via `make ruby-run`;
+#   recorded in run-metadata.json)
 
 set -uo pipefail
 
@@ -45,6 +47,7 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 STACK_NAME="${STACK_NAME:-}"
 CFN_SIGNAL_RESOURCE="${CFN_SIGNAL_RESOURCE:-BenchmarkInstance}"
 CFN_INSTANCE_ID="${CFN_INSTANCE_ID:-}"
+VALKEY_GLIDE_RUBY_VERSION="${VALKEY_GLIDE_RUBY_VERSION:-}"
 
 MATRIX_PATH="configs/matrices/${MATRIX_NAME}.json"
 STAGE_DIR="/opt/resp-bench-runs/${JOB_ID}"
@@ -141,10 +144,13 @@ trap on_exit EXIT
 # ─────────────────────────────────────────────────────────────────────────────
 write_metadata() {
   # write_metadata <status>
-  local status="$1" end_ts git_sha valkey_version
+  local status="$1" end_ts git_sha valkey_version ruby_glide_resolved
   end_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   git_sha="$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
   valkey_version="$("${REPO_DIR}/work/valkey/bin/valkey-server" --version 2>/dev/null | head -n1 || echo unknown)"
+  # What Bundler actually resolved (the 4-space-indented specs entry in the
+  # lockfile); empty if the Ruby engine was never built on this box.
+  ruby_glide_resolved="$(sed -n 's/^    valkey-glide-rb (\([^)]*\))$/\1/p' "${REPO_DIR}/ruby/Gemfile.lock" 2>/dev/null | head -n1)"
 
   if command -v jq >/dev/null 2>&1; then
     jq -n \
@@ -159,6 +165,8 @@ write_metadata() {
       --arg az "${AVAILABILITY_ZONE}" \
       --arg ami_id "${AMI_ID}" \
       --arg valkey_version "${valkey_version}" \
+      --arg ruby_glide_requested "${VALKEY_GLIDE_RUBY_VERSION}" \
+      --arg ruby_glide_resolved "${ruby_glide_resolved}" \
       --arg sweep_rc "${SWEEP_RC}" \
       --arg start "${START_TS}" \
       --arg end "${end_ts}" \
@@ -170,13 +178,15 @@ write_metadata() {
         git_sha: $git_sha,
         sweep_exit_code: $sweep_rc,
         server: { valkey_version: $valkey_version },
+        clients: { valkey_glide_ruby: { requested: $ruby_glide_requested, resolved: $ruby_glide_resolved } },
         aws: { region: $region, instance_id: $instance_id, instance_type: $instance_type, availability_zone: $az, ami_id: $ami_id },
         timing: { start: $start, end: $end }
       }' > "${METADATA_FILE}" 2>/dev/null || true
   else
     # Fallback if jq is somehow unavailable.
-    printf '{"job_id":"%s","status":"%s","matrix":"%s","repo_tag":"%s","git_sha":"%s","sweep_exit_code":"%s","instance_type":"%s","availability_zone":"%s","ami_id":"%s","region":"%s","start":"%s","end":"%s"}\n' \
-      "${JOB_ID}" "${status}" "${MATRIX_NAME}" "${REPO_TAG}" "${git_sha}" "${SWEEP_RC}" \
+    printf '{"job_id":"%s","status":"%s","matrix":"%s","repo_tag":"%s","git_sha":"%s","ruby_glide_requested":"%s","ruby_glide_resolved":"%s","sweep_exit_code":"%s","instance_type":"%s","availability_zone":"%s","ami_id":"%s","region":"%s","start":"%s","end":"%s"}\n' \
+      "${JOB_ID}" "${status}" "${MATRIX_NAME}" "${REPO_TAG}" "${git_sha}" \
+      "${VALKEY_GLIDE_RUBY_VERSION}" "${ruby_glide_resolved}" "${SWEEP_RC}" \
       "${INSTANCE_TYPE}" "${AVAILABILITY_ZONE}" "${AMI_ID}" "${AWS_REGION}" "${START_TS}" "${end_ts}" \
       > "${METADATA_FILE}"
   fi

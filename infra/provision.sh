@@ -166,7 +166,8 @@ mvn -version 2>&1 | head -n2 | sed 's/^/[provision]   /' || true
 # ═════════════════════════════════════════════════════════════════════════════
 # LANGUAGE: Ruby (3.2+ + bundler + dev headers) — engines: redis-rb,
 #   valkey-glide-ruby. Native extensions (HDRHistogram, oj) need a compiler +
-#   ruby headers. The Gemfile pulls `valkey` from a git branch, so the first
+#   ruby headers. The Gemfile pins an exact valkey-glide-rb version from
+#   RubyGems (VALKEY_GLIDE_RUBY_VERSION, default 1.0.0), so the first
 #   `bundle install` needs network access (warmed below).
 # ═════════════════════════════════════════════════════════════════════════════
 

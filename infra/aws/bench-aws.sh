@@ -26,6 +26,11 @@
 #   --runtime-cap <min>     Hard runtime cap in minutes (default: 180).
 #   --bucket <name>         Destination bucket (default: valkey-glide-resp-bench).
 #   --job-id-prefix <p>     Prefix the job id (e.g. nightly, pr-123).
+#   --ruby-client-version <v>
+#                           Exact valkey-glide-rb gem version the instance
+#                           installs (default: 1.0.0). Accepts RubyGems
+#                           prerelease forms such as 1.1.0.pre.rc2. Only
+#                           affects matrices that select valkey-glide-ruby.
 #   --dry-run               Print the resolved deploy command + S3 prefix; do
 #                           not call AWS.
 
@@ -48,11 +53,23 @@ REPO_URL="https://github.com/Bit-Quill/resp-bench.git"
 RUNTIME_CAP="180"
 BUCKET="valkey-glide-resp-bench"
 JOB_ID_PREFIX=""
+# Reproducible default: matches the historical ruby/Gemfile pin.
+RUBY_CLIENT_VERSION="1.0.0"
 DRY_RUN=0
+
+# Safe gem-version characters only: dot/hyphen-separated alphanumeric segments.
+# Accepts 1.0.0 and 1.1.0.pre.rc2; rejects spaces, quotes, shell
+# metacharacters, and slashes. Must stay in sync with the RubyClientVersion
+# AllowedPattern in benchmark.yaml.
+readonly RUBY_CLIENT_VERSION_PATTERN='^[0-9A-Za-z]+([.-][0-9A-Za-z]+)*$'
 
 die() { printf 'bench-aws: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# require_value <flag> <argc> — fail cleanly when a flag is missing its value
+# (instead of an unbound-variable error under `set -u`).
+require_value() { [ "$2" -ge 2 ] || die "$1 requires a value"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # job_id generation: [prefix-]bench-YYYYMMDD-HHMMSS-<6 random>
@@ -82,11 +99,17 @@ cmd_deploy() {
       --runtime-cap)   RUNTIME_CAP="$2"; shift 2 ;;
       --bucket)        BUCKET="$2"; shift 2 ;;
       --job-id-prefix) JOB_ID_PREFIX="$2"; shift 2 ;;
+      --ruby-client-version)
+        require_value "$1" "$#"; RUBY_CLIENT_VERSION="$2"; shift 2 ;;
       --dry-run)       DRY_RUN=1; shift ;;
       -h|--help)       usage; exit 0 ;;
       *) die "unknown deploy flag: $1" ;;
     esac
   done
+
+  # Validate before any AWS call (dry runs included).
+  [[ "${RUBY_CLIENT_VERSION}" =~ ${RUBY_CLIENT_VERSION_PATTERN} ]] \
+    || die "invalid --ruby-client-version '${RUBY_CLIENT_VERSION}' (expected e.g. 1.0.0 or 1.1.0.pre.rc2)"
 
   [ -f "${TEMPLATE}" ] || die "template not found: ${TEMPLATE}"
 
@@ -112,6 +135,7 @@ cmd_deploy() {
       "RepoUrl=${REPO_URL}"
       "RuntimeCapMinutes=${RUNTIME_CAP}"
       "S3Bucket=${BUCKET}"
+      "RubyClientVersion=${RUBY_CLIENT_VERSION}"
   )
 
   if [ "${DRY_RUN}" -eq 1 ]; then
@@ -123,6 +147,7 @@ cmd_deploy() {
     echo
     echo "Job id:      ${job_id}"
     echo "Stack name:  ${stack_name}"
+    echo "Ruby GLIDE:  valkey-glide-rb ${RUBY_CLIENT_VERSION}"
     echo "Results will appear at: ${s3_prefix}"
     return 0
   fi
