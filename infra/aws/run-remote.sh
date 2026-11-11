@@ -28,7 +28,8 @@
 #   JOB_ID, S3_BUCKET, MATRIX_NAME, REPO_TAG, RUNTIME_CAP_MINUTES,
 #   AWS_REGION, STACK_NAME, CFN_SIGNAL_RESOURCE, CFN_INSTANCE_ID, REPO_DIR,
 #   VALKEY_GLIDE_RUBY_VERSION (consumed by ruby/Gemfile via `make ruby-run`;
-#   recorded in run-metadata.json)
+#   recorded in run-metadata.json),
+#   RESULTS_PREFIX (S3 key prefix under runs/; default runs/<JOB_ID>)
 
 set -uo pipefail
 
@@ -56,7 +57,8 @@ GRAPHS_DIR="${STAGE_DIR}/graphs"
 LOGS_DIR="${STAGE_DIR}/logs"
 METADATA_FILE="${STAGE_DIR}/run-metadata.json"
 REPORT_FILE="${STAGE_DIR}/report.html"
-S3_PREFIX="s3://${S3_BUCKET}/runs/${JOB_ID}/"
+RESULTS_PREFIX="${RESULTS_PREFIX:-runs/${JOB_ID}}"
+S3_PREFIX="s3://${S3_BUCKET}/${RESULTS_PREFIX}/"
 
 START_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SIGNALLED=0
@@ -167,6 +169,7 @@ write_metadata() {
       --arg valkey_version "${valkey_version}" \
       --arg ruby_glide_requested "${VALKEY_GLIDE_RUBY_VERSION}" \
       --arg ruby_glide_resolved "${ruby_glide_resolved}" \
+      --arg s3_prefix "${S3_PREFIX}" \
       --arg sweep_rc "${SWEEP_RC}" \
       --arg start "${START_TS}" \
       --arg end "${end_ts}" \
@@ -179,14 +182,15 @@ write_metadata() {
         sweep_exit_code: $sweep_rc,
         server: { valkey_version: $valkey_version },
         clients: { valkey_glide_ruby: { requested: $ruby_glide_requested, resolved: $ruby_glide_resolved } },
+        s3_prefix: $s3_prefix,
         aws: { region: $region, instance_id: $instance_id, instance_type: $instance_type, availability_zone: $az, ami_id: $ami_id },
         timing: { start: $start, end: $end }
       }' > "${METADATA_FILE}" 2>/dev/null || true
   else
     # Fallback if jq is somehow unavailable.
-    printf '{"job_id":"%s","status":"%s","matrix":"%s","repo_tag":"%s","git_sha":"%s","ruby_glide_requested":"%s","ruby_glide_resolved":"%s","sweep_exit_code":"%s","instance_type":"%s","availability_zone":"%s","ami_id":"%s","region":"%s","start":"%s","end":"%s"}\n' \
+    printf '{"job_id":"%s","status":"%s","matrix":"%s","repo_tag":"%s","git_sha":"%s","ruby_glide_requested":"%s","ruby_glide_resolved":"%s","s3_prefix":"%s","sweep_exit_code":"%s","instance_type":"%s","availability_zone":"%s","ami_id":"%s","region":"%s","start":"%s","end":"%s"}\n' \
       "${JOB_ID}" "${status}" "${MATRIX_NAME}" "${REPO_TAG}" "${git_sha}" \
-      "${VALKEY_GLIDE_RUBY_VERSION}" "${ruby_glide_resolved}" "${SWEEP_RC}" \
+      "${VALKEY_GLIDE_RUBY_VERSION}" "${ruby_glide_resolved}" "${S3_PREFIX}" "${SWEEP_RC}" \
       "${INSTANCE_TYPE}" "${AVAILABILITY_ZONE}" "${AMI_ID}" "${AWS_REGION}" "${START_TS}" "${end_ts}" \
       > "${METADATA_FILE}"
   fi

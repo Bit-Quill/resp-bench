@@ -137,14 +137,33 @@ infra/aws/bench-aws.sh deploy \
   installed version as `metadata.primary_driver_version`; `run-metadata.json`
   records `clients.valkey_glide_ruby.requested` and `.resolved` (from
   `ruby/Gemfile.lock`); the stack outputs include `RubyClientVersion`.
+- **Results are filed by version** when the flag is passed (see below). To file
+  a baseline the same way, pass the default explicitly:
+  `--ruby-client-version 1.0.0`.
 
 Locally, the same variable drives the Ruby engine:
 `VALKEY_GLIDE_RUBY_VERSION=1.1.0.pre.rc2 make ruby-build`.
 
 ## What lands in S3
 
+Results go to `runs/<job_id>/`. Runs launched with an explicit
+`--ruby-client-version` go to a version-keyed prefix instead, so all runs of
+one Ruby GLIDE version (and its RCs) sit together:
+
+| `--ruby-client-version` | Prefix |
+|---|---|
+| *(not passed)* | `runs/<job_id>/` |
+| `1.0.0` | `runs/ruby/1.0.0/release/<job_id>/` |
+| `1.1.0.pre.rc2` | `runs/ruby/1.1.0/rc/<job_id>/` (job id gains `rc2`, e.g. `ruby-perf-rc2-bench-…`) |
+
+The base version is the leading numeric part; any letter in the version means a
+RubyGems prerelease (`rc`). The prefix always stays under `runs/` (the only
+prefix the instance can write). `deploy` prints the prefix, `run-metadata.json`
+records it as `s3_prefix`, and `bench-aws.sh check <job_id>` finds a run in
+either layout.
+
 ```
-runs/<job_id>/
+<prefix>/
   report.html          # interactive Plotly report (scalability + delta)
   run-metadata.json    # job id, status, matrix, repo tag + git sha, Valkey
                        #   version, Ruby GLIDE requested/resolved version,
