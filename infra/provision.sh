@@ -48,6 +48,17 @@ DOTNET_CHANNEL="${DOTNET_CHANNEL:-10.0}"
 log() { printf '[provision] %s\n' "$*"; }
 err() { printf '[provision] ERROR: %s\n' "$*" >&2; }
 
+# Some launchers run this with no HOME at all (EC2 cloud-init UserData does),
+# and under `set -u` the first ${HOME} use (rustup/cargo, .NET fallback) aborts
+# provisioning. Derive it from the passwd entry and export it so child tools
+# (rustup, cargo, bundler, pip) agree on one home.
+if [ -z "${HOME:-}" ]; then
+  HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
+  [ -n "${HOME}" ] || { err "HOME is unset and no passwd home for uid $(id -u)"; exit 1; }
+  log "HOME was unset; using ${HOME}"
+fi
+export HOME
+
 # Run privileged commands only when we are not already root.
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
