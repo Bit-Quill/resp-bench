@@ -1,0 +1,18 @@
+{
+    "description": "Performance sweep - Ruby: valkey-glide-ruby vs redis-rb (high-throughput configs, 10s command timeout). Select the GLIDE gem with bench-aws.sh --ruby-client-version (default 1.0.0); redis-rb is the stable yardstick, so compare GLIDE/redis-rb ratios across runs to cancel instance-to-instance noise. Connections stop at 16: the Ruby engine's default process mode forks one worker per connection and caps at 16.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 3,
+    "dimensions": {
+        "connections": [
+            1,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-ruby.json",
+            "configs/drivers/high-throughput/redis-rb.json"
+        ]
+    }
+}
