@@ -197,6 +197,15 @@ write_metadata() {
 # ═════════════════════════════════════════════════════════════════════════════
 cd "${REPO_DIR}" || exit 1
 
+# UserData runs us with no HOME; the env file below references $HOME (cargo
+# PATH) and would abort under `set -u`. Same derivation as provision.sh.
+if [ -z "${HOME:-}" ]; then
+  HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
+  [ -n "${HOME}" ] || { log "ERROR: HOME is unset and no passwd home for uid $(id -u)"; exit 1; }
+  log "HOME was unset; using ${HOME}"
+fi
+export HOME
+
 # Make the provisioned toolchain (e.g. dotnet on PATH) visible here.
 if [ -f "${REPO_DIR}/.resp-bench-env" ]; then
   # shellcheck source=/dev/null
