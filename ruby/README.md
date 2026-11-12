@@ -50,6 +50,31 @@ make ruby-run \
   WORKLOAD=configs/workloads/example-workload.json
 ```
 
+`ruby-run` runs from the project root, so `DRIVER`, `WORKLOAD`, and
+`METRICS_OUTPUT` may be repo-relative or absolute paths.
+
+### Selecting the valkey-glide-rb version
+
+The Gemfile pins `valkey-glide-rb` to an exact version, `1.0.0` by default.
+Set `VALKEY_GLIDE_RUBY_VERSION` to benchmark another published version,
+including RubyGems prereleases:
+
+```bash
+export VALKEY_GLIDE_RUBY_VERSION=1.1.0.pre.rc2
+make ruby-build
+make ruby-run DRIVER=configs/drivers/default/valkey-glide-ruby.json WORKLOAD=...
+```
+
+- Keep the variable set for every command: `ruby-run` re-runs `ruby-build`,
+  which re-resolves the bundle. Unset or blank means `1.0.0`.
+- Use the RubyGems spelling (`1.1.0.pre.rc2`, not `1.1.0-rc2`). List published
+  versions with `gem list --remote --all --prerelease valkey-glide-rb`.
+- Results report the installed version as `metadata.primary_driver_version`.
+- `Gemfile.lock` is not committed, because it depends on this variable.
+
+On AWS, `infra/aws/bench-aws.sh --ruby-client-version <version>` sets it for
+the run (see [infra/README.md](../infra/README.md)).
+
 ## Configuration
 
 The Ruby engine uses the same JSON configuration format as other language engines.
@@ -223,7 +248,8 @@ The Ruby engine produces NDJSON output compatible with all other language engine
 ## Dependencies
 
 - `redis` (~> 5.0) - redis-rb client
-- `valkey-glide-rb` (1.0.0) - valkey-glide-ruby client
+- `valkey-glide-rb` (exactly `$VALKEY_GLIDE_RUBY_VERSION`, default 1.0.0) - valkey-glide-ruby client
+- `base64`, `logger` - former default gems, declared so the engine loads on Ruby 3.4+ and 4.0
 - `concurrent-ruby` - Thread-safe data structures
 - `hdrhistogram` - Latency histograms
 - `oj` - Fast JSON serialization
