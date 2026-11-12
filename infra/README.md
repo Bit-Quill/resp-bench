@@ -154,10 +154,14 @@ one Ruby GLIDE version (and its RCs) sit together:
 |---|---|
 | *(not passed)* | `runs/<job_id>/` |
 | `1.0.0` | `runs/ruby/1.0.0/release/<job_id>/` |
-| `1.1.0.pre.rc2` | `runs/ruby/1.1.0/rc/<job_id>/` (job id gains `rc2`, e.g. `ruby-perf-rc2-bench-…`) |
+| `1.1.0.pre.rc2` (or `1.1.0-rc2`) | `runs/ruby/1.1.0/rc/1.1.0-rc2/<job_id>/` |
+| `1.1.0.pre.rc3` | `runs/ruby/1.1.0/rc/1.1.0-rc3/<job_id>/` |
 
 The base version is the leading numeric part; any letter in the version means a
-RubyGems prerelease (`rc`). The prefix always stays under `runs/` (the only
+RubyGems prerelease, which gets its own `<base>-<tag>` folder under `rc/` so
+every run of one RC (including repeats) sits together. `1.1.0.pre.rc2` and
+`1.1.0-rc2` name the same gem and map to the same folder; `run-metadata.json`
+keeps the exact gem version. The prefix always stays under `runs/` (the only
 prefix the instance can write). `deploy` prints the prefix, `run-metadata.json`
 records it as `s3_prefix`, and `bench-aws.sh check <job_id>` finds a run in
 either layout.

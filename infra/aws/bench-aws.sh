@@ -8,9 +8,12 @@
 #
 # S3 layout: s3://<bucket>/runs/<job_id>/ by default. When
 # --ruby-client-version is passed explicitly, results are filed by Ruby GLIDE
-# version instead: s3://<bucket>/runs/ruby/<base>/<rc|release>/<job_id>/
-# (base = leading numeric part, e.g. 1.1.0; any letter in the version means a
-# RubyGems prerelease -> rc).
+# version instead:
+#   release (e.g. 1.0.0):          runs/ruby/<base>/release/<job_id>/
+#   prerelease (e.g. 1.1.0.pre.rc2): runs/ruby/<base>/rc/<base>-<tag>/<job_id>/
+#                                    e.g. runs/ruby/1.1.0/rc/1.1.0-rc2/<job_id>/
+# base = leading numeric part; any letter in the version means a RubyGems
+# prerelease. 1.1.0.pre.rc2 and 1.1.0-rc2 are the same gem and the same folder.
 #
 # Region is PINNED to us-east-1 for every AWS call — never inherited from the
 # ambient shell (which may export AWS_REGION=us-west-2). The S3 bucket lives in
@@ -40,8 +43,8 @@
 #                           prerelease forms such as 1.1.0.pre.rc2. Only
 #                           affects matrices that select valkey-glide-ruby.
 #                           Passing it also files results under
-#                           runs/ruby/<base>/<rc|release>/, and a prerelease
-#                           tag (e.g. rc2) is added to the job id.
+#                           runs/ruby/<base>/release/ or
+#                           runs/ruby/<base>/rc/<base>-<tag>/ (see S3 layout).
 #   --dry-run               Print the resolved deploy command + S3 prefix; do
 #                           not call AWS.
 
@@ -103,7 +106,7 @@ generate_job_id() {
 # Ruby GLIDE version -> S3 layout pieces (input already pattern-validated)
 #   ruby_base_version 1.1.0.pre.rc2 -> 1.1.0   (leading numeric segments)
 #   ruby_channel      1.1.0.pre.rc2 -> rc      (any letter = prerelease)
-#   ruby_prerelease_tag 1.1.0.pre.rc2 -> rc2   ("" for releases)
+#   ruby_prerelease_tag 1.1.0.pre.rc2 -> rc2   ("" for releases; 1.1.0-rc2 -> rc2)
 # ─────────────────────────────────────────────────────────────────────────────
 ruby_base_version() {
   # Always exit 0 (callers use $(...) under `set -e`); empty output = no match.
@@ -149,18 +152,19 @@ cmd_deploy() {
   # File explicitly versioned Ruby GLIDE runs by version; everything else keeps
   # runs/<job_id>/. Must stay under runs/: the instance role may only write
   # runs/* (benchmark.yaml), and the ResultsPrefix AllowedPattern enforces it.
-  local ruby_layout="" ruby_tag=""
+  local ruby_layout=""
   if [ "${RUBY_CLIENT_VERSION_SET}" -eq 1 ]; then
-    local base channel
+    local base tag
     base="$(ruby_base_version "${RUBY_CLIENT_VERSION}")"
     [ -n "${base}" ] || die "--ruby-client-version '${RUBY_CLIENT_VERSION}' must start with a numeric version (e.g. 1.1.0.pre.rc2)"
-    channel="$(ruby_channel "${RUBY_CLIENT_VERSION}")"
-    ruby_layout="runs/ruby/${base}/${channel}"
-    # rc1 and rc2 share runs/ruby/<base>/rc/, so put the tag in the job id
-    # unless the caller's prefix already carries it.
-    ruby_tag="$(ruby_prerelease_tag "${RUBY_CLIENT_VERSION}")"
-    if [ -n "${ruby_tag}" ] && [[ "${JOB_ID_PREFIX}" != *"${ruby_tag}"* ]]; then
-      JOB_ID_PREFIX="${JOB_ID_PREFIX:+${JOB_ID_PREFIX}-}${ruby_tag}"
+    if [ "$(ruby_channel "${RUBY_CLIENT_VERSION}")" = "release" ]; then
+      ruby_layout="runs/ruby/${base}/release"
+    else
+      # One folder per prerelease, so rc2 and rc3 (and repeat runs of each)
+      # stay apart: runs/ruby/1.1.0/rc/1.1.0-rc2/<job_id>/.
+      tag="$(ruby_prerelease_tag "${RUBY_CLIENT_VERSION}")"
+      [ -n "${tag}" ] || die "cannot derive a prerelease tag from --ruby-client-version '${RUBY_CLIENT_VERSION}'"
+      ruby_layout="runs/ruby/${base}/rc/${base}-${tag}"
     fi
   fi
 

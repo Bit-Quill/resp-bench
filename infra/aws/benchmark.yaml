@@ -97,9 +97,10 @@ Parameters:
     MaxLength: 512
     Description: >-
       S3 key prefix (no trailing slash) the run uploads to, computed by
-      bench-aws.sh: runs/<JobId> by default, or
-      runs/ruby/<base>/<rc|release>/<JobId> when --ruby-client-version is
-      passed. Empty means runs/<JobId>.
+      bench-aws.sh: runs/<JobId> by default, or (when --ruby-client-version
+      is passed) runs/ruby/<base>/release/<JobId> for releases and
+      runs/ruby/<base>/rc/<base>-<tag>/<JobId> for prereleases. Empty means
+      runs/<JobId>.
     # Must stay under runs/ (the only prefix the instance role can write) and
     # use only safe path segments: each starts with an alphanumeric, so no
     # empty, "." or ".." segments, spaces, or shell metacharacters.
