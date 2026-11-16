@@ -68,7 +68,37 @@ Parameters:
     Default: valkey-glide-resp-bench
     Description: >-
       Destination S3 bucket. Results land under s3://<bucket>/runs/<JobId>/.
-      The instance role is scoped to s3:PutObject on runs/* of this bucket only.
+      The instance role is scoped to s3:PutObject on runs/* and s3:GetObject
+      on inputs/* of this bucket only.
+
+  CsharpClientVersion:
+    Type: String
+    Default: ""
+    Description: >-
+      Valkey.Glide NuGet package version the C# engine builds against (exported
+      as GLIDE_CSHARP_VERSION, consumed by the Makefile's C# targets), e.g.
+      1.2.0 or 1.2.0-rc3. Empty means the version pinned in
+      csharp/Directory.Build.props. Only affects matrices that select
+      valkey-glide-csharp.
+    # NuGet version characters only, so the value is safe to interpolate into
+    # UserData. Keep in sync with CSHARP_CLIENT_VERSION_PATTERN in bench-aws.sh.
+    AllowedPattern: "^([0-9]+(\\.[0-9]+){1,3}(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)?$"
+    ConstraintDescription: must be empty or a NuGet version such as 1.2.0 or 1.2.0-rc3.
+
+  CsharpClientPackageKey:
+    Type: String
+    Default: ""
+    MaxLength: 512
+    Description: >-
+      Optional S3 key (under inputs/ of S3Bucket) of a Valkey.Glide .nupkg for a
+      version not published on nuget.org, e.g. a release candidate. Downloaded
+      into a local package feed before provisioning (exported as
+      GLIDE_CSHARP_FEED). Requires CsharpClientVersion.
+    # Alphanumeric-led path segments only (no "..", spaces, or shell
+    # metacharacters). Keep in sync with CSHARP_PACKAGE_KEY_PATTERN in
+    # bench-aws.sh.
+    AllowedPattern: "^(inputs(/[0-9A-Za-z][0-9A-Za-z._-]*)+\\.nupkg)?$"
+    ConstraintDescription: must be empty or inputs/<path>.nupkg.
 
   BaseAmiId:
     Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
@@ -114,6 +144,15 @@ Resources:
               - Effect: Allow
                 Action: s3:PutObject
                 Resource: !Sub "arn:aws:s3:::${S3Bucket}/runs/*"
+        # Read-only access to benchmark inputs (e.g. pre-release client
+        # packages passed via CsharpClientPackageKey).
+        - PolicyName: GetBenchmarkInputs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${S3Bucket}/inputs/*"
         - PolicyName: SignalOwnStack
           PolicyDocument:
             Version: "2012-10-17"
@@ -222,6 +261,22 @@ Resources:
           REPO_DIR=/opt/resp-bench
           git clone --depth 1 --branch "${RepoTag}" "${RepoUrl}" "$REPO_DIR"
 
+          # Selected Valkey GLIDE C# package. Exported BEFORE provision.sh (whose
+          # C# warm-up runs `make csharp-build`) and inherited by run-remote.sh
+          # (where `make csharp-run` rebuilds), so both restore the same version.
+          # AllowedPatterns restrict both values to safe characters.
+          GLIDE_CSHARP_VERSION="${CsharpClientVersion}"
+          GLIDE_CSHARP_PACKAGE_KEY="${CsharpClientPackageKey}"
+          if [ -n "$GLIDE_CSHARP_PACKAGE_KEY" ]; then
+            [ -n "$GLIDE_CSHARP_VERSION" ] || { echo "CsharpClientPackageKey requires CsharpClientVersion" >&2; false; }
+            GLIDE_CSHARP_FEED=/opt/glide-csharp-feed
+            mkdir -p "$GLIDE_CSHARP_FEED"
+            aws s3 cp --region "$REGION" "s3://${S3Bucket}/$GLIDE_CSHARP_PACKAGE_KEY" "$GLIDE_CSHARP_FEED/"
+            export GLIDE_CSHARP_FEED
+          fi
+          if [ -n "$GLIDE_CSHARP_VERSION" ]; then export GLIDE_CSHARP_VERSION; fi
+          export GLIDE_CSHARP_PACKAGE_KEY
+
           # Cloud-agnostic toolchain install + engine build + cache warm-up.
           export REPO_DIR
           bash "$REPO_DIR/infra/provision.sh"
@@ -252,6 +307,10 @@ Outputs:
   S3Prefix:
     Description: Where results will appear.
     Value: !Sub "s3://${S3Bucket}/runs/${JobId}/"
+
+  CsharpClientVersion:
+    Description: Requested Valkey.Glide C# package version (empty = repo default pin).
+    Value: !Ref CsharpClientVersion
 
   InstanceId:
     Description: The (self-terminating) benchmark instance.

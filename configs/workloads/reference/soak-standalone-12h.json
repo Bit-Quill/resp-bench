@@ -1,0 +1,63 @@
+{
+    "schema_version": "1.0",
+    "benchmark_profile": {
+        "name": "Soak - Standalone, 12h STEADY state",
+        "description": "Memory-stability soak: populate 100K keys, then hold 80/20 GET/SET for 12 hours at full load. Pair with the matrix runner's process-group RSS samples (<label>.system.ndjson, cadence set by the matrix cpu_interval) to judge whether memory is flat or rising. Connection count is supplied by the matrix runner, which overwrites it on every phase.",
+        "version": "1.0.0"
+    },
+    "phases": [
+        {
+            "id": "WARMUP",
+            "description": "Populate the keyspace with sequential SETs so STEADY GETs hit",
+            "connections": 8,
+            "cps_limit": -1,
+            "rps_limit": -1,
+            "completion": {
+                "type": "requests",
+                "requests": 100000
+            },
+            "keyspace": {
+                "keys_count": 100000,
+                "key_size_bytes": 16,
+                "key_prefix": "soak:",
+                "generation_alg": "sequential_int"
+            },
+            "commands": [
+                {
+                    "command": "set",
+                    "weight": 1.0,
+                    "data_size_bytes": 512
+                }
+            ]
+        },
+        {
+            "id": "STEADY",
+            "description": "12h steady-state 80/20 GET/SET - the window the memory trend is judged over",
+            "connections": 8,
+            "cps_limit": -1,
+            "rps_limit": -1,
+            "completion": {
+                "type": "duration",
+                "seconds": 43200
+            },
+            "keyspace": {
+                "keys_count": 100000,
+                "key_size_bytes": 16,
+                "key_prefix": "soak:",
+                "generation_alg": "uniform_rand",
+                "seed": 12345
+            },
+            "commands": [
+                {
+                    "command": "get",
+                    "weight": 0.8
+                },
+                {
+                    "command": "set",
+                    "weight": 0.2,
+                    "data_size_bytes": 512
+                }
+            ]
+        }
+    ]
+}

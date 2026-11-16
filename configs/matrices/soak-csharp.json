@@ -1,0 +1,15 @@
+{
+    "description": "12h memory-stability soak - C# valkey-glide-csharp, one cell. Select the GLIDE package with bench-aws.sh --csharp-client-version (and --csharp-client-package for builds not on nuget.org). Memory signal: engine process-group RSS sampled every 5s into <label>.system.ndjson. The C# engine has no per-interval throughput/latency reporting, so those are one 12h aggregate. Launch with --runtime-cap 780 so the cap never fires before the upload; run soakctl-csharp on its own instance in parallel as the control.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/soak-standalone-12h.json",
+    "iterations": 1,
+    "cpu_interval": 5,
+    "dimensions": {
+        "connections": [
+            64
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-csharp.json"
+        ]
+    }
+}

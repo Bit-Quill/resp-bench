@@ -58,3 +58,7 @@ nodes-*.conf
 # Temporary files
 *.tmp
 *.temp
+
+# C# engine build output
+csharp/**/bin/
+csharp/**/obj/

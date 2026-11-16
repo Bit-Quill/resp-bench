@@ -1,0 +1,15 @@
+<Project>
+
+  <!--
+    Valkey GLIDE C# version under test. Override at build time to benchmark a
+    different release, e.g.:
+      make csharp-build GLIDE_CSHARP_VERSION=1.2.0-rc3 GLIDE_CSHARP_FEED=/path/to/dir
+    GLIDE_CSHARP_FEED (optional) is a directory containing a local .nupkg, for
+    pre-release builds that are not yet published to nuget.org.
+  -->
+  <PropertyGroup>
+    <ValkeyGlideVersion Condition="'$(ValkeyGlideVersion)' == ''">0.9.0</ValkeyGlideVersion>
+    <RestoreAdditionalProjectSources Condition="'$(ValkeyGlideFeed)' != ''">$(ValkeyGlideFeed)</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+
+</Project>

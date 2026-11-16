@@ -26,7 +26,10 @@
 #
 # Inputs (exported by UserData):
 #   JOB_ID, S3_BUCKET, MATRIX_NAME, REPO_TAG, RUNTIME_CAP_MINUTES,
-#   AWS_REGION, STACK_NAME, CFN_SIGNAL_RESOURCE, CFN_INSTANCE_ID, REPO_DIR
+#   AWS_REGION, STACK_NAME, CFN_SIGNAL_RESOURCE, CFN_INSTANCE_ID, REPO_DIR,
+#   GLIDE_CSHARP_VERSION / GLIDE_CSHARP_FEED (optional; consumed by the
+#   Makefile's C# targets), GLIDE_CSHARP_PACKAGE_KEY (optional; recorded in
+#   run-metadata.json)
 
 set -uo pipefail
 
@@ -45,6 +48,8 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 STACK_NAME="${STACK_NAME:-}"
 CFN_SIGNAL_RESOURCE="${CFN_SIGNAL_RESOURCE:-BenchmarkInstance}"
 CFN_INSTANCE_ID="${CFN_INSTANCE_ID:-}"
+GLIDE_CSHARP_VERSION="${GLIDE_CSHARP_VERSION:-}"
+GLIDE_CSHARP_PACKAGE_KEY="${GLIDE_CSHARP_PACKAGE_KEY:-}"
 
 MATRIX_PATH="configs/matrices/${MATRIX_NAME}.json"
 STAGE_DIR="/opt/resp-bench-runs/${JOB_ID}"
@@ -141,10 +146,13 @@ trap on_exit EXIT
 # ─────────────────────────────────────────────────────────────────────────────
 write_metadata() {
   # write_metadata <status>
-  local status="$1" end_ts git_sha valkey_version
+  local status="$1" end_ts git_sha valkey_version csharp_glide_resolved
   end_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   git_sha="$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
   valkey_version="$("${REPO_DIR}/work/valkey/bin/valkey-server" --version 2>/dev/null | head -n1 || echo unknown)"
+  # What NuGet actually restored for the C# engine; empty if it was never built.
+  csharp_glide_resolved="$(jq -r '.libraries | keys[] | select(startswith("Valkey.Glide/")) | ltrimstr("Valkey.Glide/")' \
+    "${REPO_DIR}/csharp/src/RespBench/obj/project.assets.json" 2>/dev/null | head -n1)"
 
   if command -v jq >/dev/null 2>&1; then
     jq -n \
@@ -159,6 +167,9 @@ write_metadata() {
       --arg az "${AVAILABILITY_ZONE}" \
       --arg ami_id "${AMI_ID}" \
       --arg valkey_version "${valkey_version}" \
+      --arg csharp_glide_requested "${GLIDE_CSHARP_VERSION}" \
+      --arg csharp_glide_resolved "${csharp_glide_resolved}" \
+      --arg csharp_glide_package "${GLIDE_CSHARP_PACKAGE_KEY}" \
       --arg sweep_rc "${SWEEP_RC}" \
       --arg start "${START_TS}" \
       --arg end "${end_ts}" \
@@ -170,6 +181,7 @@ write_metadata() {
         git_sha: $git_sha,
         sweep_exit_code: $sweep_rc,
         server: { valkey_version: $valkey_version },
+        clients: { valkey_glide_csharp: { requested: $csharp_glide_requested, resolved: $csharp_glide_resolved, package: $csharp_glide_package } },
         aws: { region: $region, instance_id: $instance_id, instance_type: $instance_type, availability_zone: $az, ami_id: $ami_id },
         timing: { start: $start, end: $end }
       }' > "${METADATA_FILE}" 2>/dev/null || true

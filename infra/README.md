@@ -107,9 +107,36 @@ infra/aws/bench-aws.sh deploy \
 > `valkey-cli`). That is expected and out of scope here: the run still uploads a
 > diagnosable bundle and self-terminates.
 
-## What lands in S3
+### Selecting the Valkey GLIDE C# version
+
+C# matrices build against the `Valkey.Glide` version pinned in
+`csharp/Directory.Build.props` unless you pass `--csharp-client-version`. For a
+version that is not on nuget.org (e.g. a release candidate), upload the `.nupkg`
+under `inputs/` of the bucket — the only prefix the instance role can read — and
+pass it with `--csharp-client-package`; the instance downloads it into a local
+package feed before provisioning:
 
 ```
+aws s3 cp Valkey.Glide.1.2.0-rc3.nupkg \
+  s3://valkey-glide-resp-bench/inputs/csharp/Valkey.Glide.1.2.0-rc3.nupkg
+
+infra/aws/bench-aws.sh deploy \
+  --matrix perf-csharp \
+  --instance-type m5.2xlarge \
+  --runtime-cap 240 \
+  --job-id-prefix csharp-1.2.0-rc3-perf \
+  --csharp-client-version 1.2.0-rc3 \
+  --csharp-client-package s3://valkey-glide-resp-bench/inputs/csharp/Valkey.Glide.1.2.0-rc3.nupkg
+```
+
+For the 12h memory soak, launch `soak-csharp` (GLIDE) and `soakctl-csharp`
+(StackExchange.Redis control) on separate instances with `--runtime-cap 780`.
+`run-metadata.json` records the requested and restored GLIDE C# versions under
+`clients.valkey_glide_csharp`.
+
+## What lands in S3
+
+```bash
 runs/<job_id>/
   report.html          # interactive Plotly report (scalability + delta)
   run-metadata.json    # job id, status, matrix, repo tag + git sha, Valkey

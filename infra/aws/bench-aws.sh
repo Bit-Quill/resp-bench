@@ -26,6 +26,16 @@
 #   --runtime-cap <min>     Hard runtime cap in minutes (default: 180).
 #   --bucket <name>         Destination bucket (default: valkey-glide-resp-bench).
 #   --job-id-prefix <p>     Prefix the job id (e.g. nightly, pr-123).
+#   --csharp-client-version <v>
+#                           Valkey.Glide NuGet package version the C# engine
+#                           builds against (e.g. 1.2.0 or 1.2.0-rc3). Default:
+#                           the version pinned in csharp/Directory.Build.props.
+#                           Only affects matrices that select valkey-glide-csharp.
+#   --csharp-client-package <s3://bucket/inputs/...nupkg>
+#                           Local .nupkg for a version that is not on nuget.org
+#                           (e.g. a release candidate). Must live under inputs/
+#                           of the results bucket (the only prefix the instance
+#                           role can read). Requires --csharp-client-version.
 #   --dry-run               Print the resolved deploy command + S3 prefix; do
 #                           not call AWS.
 
@@ -48,7 +58,16 @@ REPO_URL="https://github.com/Bit-Quill/resp-bench.git"
 RUNTIME_CAP="180"
 BUCKET="valkey-glide-resp-bench"
 JOB_ID_PREFIX=""
+CSHARP_CLIENT_VERSION=""
+CSHARP_CLIENT_PACKAGE=""
 DRY_RUN=0
+
+# NuGet version characters only (e.g. 1.2.0, 1.2.0-rc3). Must stay in sync
+# with the CsharpClientVersion AllowedPattern in benchmark.yaml.
+readonly CSHARP_CLIENT_VERSION_PATTERN='^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'
+# S3 key of the .nupkg, relative to the bucket. Must stay in sync with the
+# CsharpClientPackageKey AllowedPattern in benchmark.yaml.
+readonly CSHARP_PACKAGE_KEY_PATTERN='^inputs(/[0-9A-Za-z][0-9A-Za-z._-]*)+\.nupkg$'
 
 die() { printf 'bench-aws: %s\n' "$*" >&2; exit 1; }
 
@@ -82,6 +101,8 @@ cmd_deploy() {
       --runtime-cap)   RUNTIME_CAP="$2"; shift 2 ;;
       --bucket)        BUCKET="$2"; shift 2 ;;
       --job-id-prefix) JOB_ID_PREFIX="$2"; shift 2 ;;
+      --csharp-client-version) CSHARP_CLIENT_VERSION="$2"; shift 2 ;;
+      --csharp-client-package) CSHARP_CLIENT_PACKAGE="$2"; shift 2 ;;
       --dry-run)       DRY_RUN=1; shift ;;
       -h|--help)       usage; exit 0 ;;
       *) die "unknown deploy flag: $1" ;;
@@ -89,6 +110,21 @@ cmd_deploy() {
   done
 
   [ -f "${TEMPLATE}" ] || die "template not found: ${TEMPLATE}"
+
+  # Validate the C# GLIDE selection before any AWS call (dry runs included).
+  if [ -n "${CSHARP_CLIENT_VERSION}" ] && ! [[ "${CSHARP_CLIENT_VERSION}" =~ ${CSHARP_CLIENT_VERSION_PATTERN} ]]; then
+    die "invalid --csharp-client-version '${CSHARP_CLIENT_VERSION}' (expected e.g. 1.2.0 or 1.2.0-rc3)"
+  fi
+  local csharp_package_key=""
+  if [ -n "${CSHARP_CLIENT_PACKAGE}" ]; then
+    [ -n "${CSHARP_CLIENT_VERSION}" ] || die "--csharp-client-package requires --csharp-client-version"
+    case "${CSHARP_CLIENT_PACKAGE}" in
+      "s3://${BUCKET}/"*) csharp_package_key="${CSHARP_CLIENT_PACKAGE#"s3://${BUCKET}/"}" ;;
+      *) die "--csharp-client-package must be under s3://${BUCKET}/inputs/" ;;
+    esac
+    [[ "${csharp_package_key}" =~ ${CSHARP_PACKAGE_KEY_PATTERN} ]] \
+      || die "--csharp-client-package must be s3://${BUCKET}/inputs/<path>.nupkg"
+  fi
 
   local job_id stack_name s3_prefix
   job_id="$(generate_job_id)"
@@ -112,6 +148,8 @@ cmd_deploy() {
       "RepoUrl=${REPO_URL}"
       "RuntimeCapMinutes=${RUNTIME_CAP}"
       "S3Bucket=${BUCKET}"
+      "CsharpClientVersion=${CSHARP_CLIENT_VERSION}"
+      "CsharpClientPackageKey=${csharp_package_key}"
   )
 
   if [ "${DRY_RUN}" -eq 1 ]; then
@@ -123,6 +161,7 @@ cmd_deploy() {
     echo
     echo "Job id:      ${job_id}"
     echo "Stack name:  ${stack_name}"
+    echo "C# GLIDE:    ${CSHARP_CLIENT_VERSION:-<default pin>}${csharp_package_key:+ (from s3://${BUCKET}/${csharp_package_key})}"
     echo "Results will appear at: ${s3_prefix}"
     return 0
   fi

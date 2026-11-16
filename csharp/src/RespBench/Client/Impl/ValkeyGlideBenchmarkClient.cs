@@ -3,13 +3,14 @@
  *
  * Valkey GLIDE C# client implementation.
  * Based on https://github.com/valkey-io/valkey-glide-csharp
- * NuGet: Valkey.Glide v0.9.0
+ * NuGet: Valkey.Glide (version set by ValkeyGlideVersion in csharp/Directory.Build.props)
  *
  * Valkey.Glide uses a StackExchange.Redis-compatible API
  * (ConnectionMultiplexer, IDatabase, IServer), so the implementation
  * mirrors StackExchangeRedisBenchmarkClient closely.
  */
 using System.Diagnostics;
+using System.Reflection;
 using RespBench.Config;
 using Valkey.Glide;
 
@@ -36,11 +37,24 @@ public class ValkeyGlideBenchmarkClient : IBenchmarkClient
         {
             try
             {
-                return typeof(ConnectionMultiplexer).Assembly.GetName().Version?.ToString() ?? "0.9.0";
+                // GLIDE assemblies carry a placeholder version (255.255.255), so report
+                // the NuGet package version recorded at build time (e.g. "1.2.0-rc3"),
+                // plus the GLIDE source commit from the informational version if present.
+                var packageVersion = typeof(ValkeyGlideBenchmarkClient).Assembly
+                    .GetCustomAttributes<AssemblyMetadataAttribute>()
+                    .FirstOrDefault(a => a.Key == "ValkeyGlidePackageVersion")?.Value;
+                var asm = typeof(ConnectionMultiplexer).Assembly;
+                var informational = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+                var plus = informational?.IndexOf('+') ?? -1;
+                var commit = plus >= 0 ? informational![(plus + 1)..] : null;
+
+                if (!string.IsNullOrEmpty(packageVersion))
+                    return commit != null ? $"{packageVersion}+{commit}" : packageVersion;
+                return informational ?? asm.GetName().Version?.ToString() ?? "unknown";
             }
             catch
             {
-                return "0.9.0";
+                return "unknown";
             }
         }
     }

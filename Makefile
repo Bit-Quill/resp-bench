@@ -419,19 +419,28 @@ ruby-info: ruby-build
 
 CSHARP_PROJECT=csharp/src/RespBench/RespBench.csproj
 
+# Optional: benchmark a specific Valkey GLIDE C# release instead of the default
+# pinned in RespBench.csproj. GLIDE_CSHARP_FEED is a directory holding a local
+# .nupkg (for pre-releases not yet on nuget.org); it must be an absolute path.
+#   make csharp-build GLIDE_CSHARP_VERSION=1.2.0-rc3 GLIDE_CSHARP_FEED=/abs/dir
+GLIDE_CSHARP_VERSION ?=
+GLIDE_CSHARP_FEED ?=
+CSHARP_PROPS = $(if $(GLIDE_CSHARP_VERSION),-p:ValkeyGlideVersion=$(GLIDE_CSHARP_VERSION)) \
+	$(if $(GLIDE_CSHARP_FEED),-p:ValkeyGlideFeed=$(GLIDE_CSHARP_FEED))
+
 csharp-build:
-	cd csharp && dotnet build -c Release
+	cd csharp && dotnet build -c Release $(CSHARP_PROPS)
 
 csharp-test:
-	cd csharp && dotnet test
+	cd csharp && dotnet test $(CSHARP_PROPS)
 
 csharp-integration-test: server-standalone-start
 	sleep 1
-	cd csharp && VALKEY_HOST=localhost VALKEY_PORT=6379 dotnet test --filter "Category=Integration"
+	cd csharp && VALKEY_HOST=localhost VALKEY_PORT=6379 dotnet test $(CSHARP_PROPS) --filter "Category=Integration"
 	$(MAKE) server-standalone-stop
 
 csharp-run: csharp-build
-	dotnet run --project $(CSHARP_PROJECT) -c Release -- \
+	dotnet run --project $(CSHARP_PROJECT) -c Release $(CSHARP_PROPS) -- \
 		--server $(SERVER) \
 		--driver $(DRIVER) \
 		--workload $(WORKLOAD) \
@@ -443,7 +452,7 @@ csharp-clean:
 	rm -rf csharp/test/RespBench.Tests/bin csharp/test/RespBench.Tests/obj
 
 csharp-info: csharp-build
-	dotnet run --project $(CSHARP_PROJECT) -c Release -- --info
+	dotnet run --project $(CSHARP_PROJECT) -c Release $(CSHARP_PROPS) -- --info
 
 # ============================================================================
 # ============================================================================

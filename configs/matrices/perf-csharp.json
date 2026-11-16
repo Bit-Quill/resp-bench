@@ -1,0 +1,19 @@
+{
+    "description": "Performance sweep - C#: valkey-glide-csharp vs StackExchange.Redis (default configs), matching the Valkey GLIDE C# 1.0 GA comparison. Select the GLIDE package with bench-aws.sh --csharp-client-version (and --csharp-client-package for builds not on nuget.org); StackExchange.Redis is the stable yardstick, so compare GLIDE/StackExchange.Redis ratios across runs to cancel instance-to-instance noise.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 5,
+    "dimensions": {
+        "connections": [
+            1,
+            2,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/default/valkey-glide-csharp.json",
+            "configs/drivers/default/stackexchange-redis.json"
+        ]
+    }
+}
