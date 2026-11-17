@@ -1,5 +1,5 @@
 {
-    "description": "Control soak for soak-csharp: identical workload with StackExchange.Redis instead of GLIDE. Launch on its own instance in parallel; a flat control with a rising GLIDE series isolates the growth to GLIDE rather than the engine/harness. Launch with --runtime-cap 780.",
+    "description": "Control soak for soak-csharp: identical workload with StackExchange.Redis instead of GLIDE. Launch on its own instance in parallel; a flat control with a rising GLIDE series isolates the growth to GLIDE rather than the engine/harness. Launch with --runtime-cap 780. StackExchange.Redis cells set DOTNET_ThreadPool_ForceMinWorkerThreads=80 (hex: 128 min worker threads): the engine's StackExchange.Redis client issues synchronous calls from concurrent tasks, which starves the default thread pool (min = vCPU count) and times out the first PING at 16+ connections on an 8-vCPU host.",
     "x_axis": "connections",
     "workload_template": "configs/workloads/reference/soak-standalone-12h.json",
     "iterations": 1,
@@ -10,6 +10,18 @@
         ],
         "driver_config": [
             "configs/drivers/high-throughput/stackexchange-redis.json"
-        ]
+        ],
+        "env": {
+            "values": [
+                {
+                    "DOTNET_ThreadPool_ForceMinWorkerThreads": "80"
+                }
+            ],
+            "applies_to": {
+                "driver_config": [
+                    "*stackexchange-redis*"
+                ]
+            }
+        }
     }
 }

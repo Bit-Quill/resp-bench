@@ -1,5 +1,5 @@
 {
-    "description": "Performance sweep - C#: valkey-glide-csharp vs StackExchange.Redis (default configs), matching the Valkey GLIDE C# 1.0 GA comparison. Select the GLIDE package with bench-aws.sh --csharp-client-version (and --csharp-client-package for builds not on nuget.org); StackExchange.Redis is the stable yardstick, so compare GLIDE/StackExchange.Redis ratios across runs to cancel instance-to-instance noise.",
+    "description": "Performance sweep - C#: valkey-glide-csharp vs StackExchange.Redis (default configs), matching the Valkey GLIDE C# 1.0 GA comparison. Select the GLIDE package with bench-aws.sh --csharp-client-version (and --csharp-client-package for builds not on nuget.org); StackExchange.Redis is the stable yardstick, so compare GLIDE/StackExchange.Redis ratios across runs to cancel instance-to-instance noise. StackExchange.Redis cells set DOTNET_ThreadPool_ForceMinWorkerThreads=80 (hex: 128 min worker threads): the engine's StackExchange.Redis client issues synchronous calls from concurrent tasks, which starves the default thread pool (min = vCPU count) and times out the first PING at 16+ connections on an 8-vCPU host.",
     "x_axis": "connections",
     "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
     "iterations": 5,
@@ -14,6 +14,18 @@
         "driver_config": [
             "configs/drivers/default/valkey-glide-csharp.json",
             "configs/drivers/default/stackexchange-redis.json"
-        ]
+        ],
+        "env": {
+            "values": [
+                {
+                    "DOTNET_ThreadPool_ForceMinWorkerThreads": "80"
+                }
+            ],
+            "applies_to": {
+                "driver_config": [
+                    "*stackexchange-redis*"
+                ]
+            }
+        }
     }
 }
