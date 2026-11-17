@@ -1,0 +1,12 @@
+{
+    "description": "Ruby GLIDE version smoke benchmark",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-10-secs.json",
+    "iterations": 1,
+    "dimensions": {
+        "connections": [1, 4],
+        "driver_config": [
+            "configs/drivers/default/valkey-glide-ruby.json"
+        ]
+    }
+}

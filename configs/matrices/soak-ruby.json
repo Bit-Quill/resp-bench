@@ -1,0 +1,15 @@
+{
+    "description": "12h memory-stability soak - Ruby valkey-glide-ruby, one cell. Select the GLIDE gem with bench-aws.sh --ruby-client-version. Memory signal: process-group RSS (all forked workers) sampled every 5s into <label>.system.ndjson. The Ruby engine has no per-interval throughput/latency reporting, so those are one 12h aggregate. 8 connections = 8 worker processes, leaving CPU headroom for the colocated server on an 8-vCPU m5.2xlarge. Launch with --runtime-cap 780 so the cap never fires before the upload.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/soak-standalone-12h.json",
+    "iterations": 1,
+    "cpu_interval": 5,
+    "dimensions": {
+        "connections": [
+            8
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-ruby.json"
+        ]
+    }
+}

@@ -20,6 +20,11 @@
 SERVER_VERSION?=8.1.1
 SERVER_PROJECT?=valkey
 SERVER_GH_ORG?=valkey-io
+# Interface(s) the local test/benchmark servers listen on. Loopback by default:
+# these servers are unauthenticated (except 6382/26382), and every client,
+# replica, sentinel, and cluster link here uses 127.0.0.1. Widening this makes
+# them reachable by anything that can route to this host — a deliberate choice.
+SERVER_BIND?=127.0.0.1
 
 # Build configuration
 SHELL=/bin/bash -euo pipefail
@@ -120,8 +125,8 @@ $(WORK_DIR)/$(SERVER_PROJECT)-6379.conf:
 	@mkdir -p $(@D)
 	echo port 6379 >> $@
 	echo daemonize yes >> $@
-	echo protected-mode no >> $@
-	echo bind 0.0.0.0 >> $@
+	echo protected-mode yes >> $@
+	echo bind $(SERVER_BIND) >> $@
 	echo notify-keyspace-events Ex >> $@
 	echo pidfile $(WORK_DIR)/$(SERVER_PROJECT)-6379.pid >> $@
 	echo logfile $(WORK_DIR)/$(SERVER_PROJECT)-6379.log >> $@
@@ -134,8 +139,8 @@ $(WORK_DIR)/$(SERVER_PROJECT)-%.conf:
 	@mkdir -p $(@D)
 	echo port $* >> $@
 	echo daemonize yes >> $@
-	echo protected-mode no >> $@
-	echo bind 0.0.0.0 >> $@
+	echo protected-mode yes >> $@
+	echo bind $(SERVER_BIND) >> $@
 	echo notify-keyspace-events Ex >> $@
 	echo pidfile $(WORK_DIR)/$(SERVER_PROJECT)-$*.pid >> $@
 	echo logfile $(WORK_DIR)/$(SERVER_PROJECT)-$*.log >> $@
@@ -149,8 +154,8 @@ $(WORK_DIR)/$(SERVER_PROJECT)-6382.conf:
 	@mkdir -p $(@D)
 	echo port 6382 >> $@
 	echo daemonize yes >> $@
-	echo protected-mode no >> $@
-	echo bind 0.0.0.0 >> $@
+	echo protected-mode yes >> $@
+	echo bind $(SERVER_BIND) >> $@
 	echo notify-keyspace-events Ex >> $@
 	echo pidfile $(WORK_DIR)/$(SERVER_PROJECT)-6382.pid >> $@
 	echo logfile $(WORK_DIR)/$(SERVER_PROJECT)-6382.log >> $@
@@ -178,8 +183,8 @@ $(WORK_DIR)/sentinel-%.conf:
 	@mkdir -p $(@D)
 	echo port $* >> $@
 	echo daemonize yes >> $@
-	echo protected-mode no >> $@
-	echo bind 0.0.0.0 >> $@
+	echo protected-mode yes >> $@
+	echo bind $(SERVER_BIND) >> $@
 	echo pidfile $(WORK_DIR)/sentinel-$*.pid >> $@
 	echo logfile $(WORK_DIR)/sentinel-$*.log >> $@
 	echo save \"\" >> $@
@@ -190,8 +195,8 @@ $(WORK_DIR)/sentinel-26382.conf:
 	@mkdir -p $(@D)
 	echo port 26382 >> $@
 	echo daemonize yes >> $@
-	echo protected-mode no >> $@
-	echo bind 0.0.0.0 >> $@
+	echo protected-mode yes >> $@
+	echo bind $(SERVER_BIND) >> $@
 	echo pidfile $(WORK_DIR)/sentinel-26382.pid >> $@
 	echo logfile $(WORK_DIR)/sentinel-26382.log >> $@
 	echo save \"\" >> $@
@@ -217,8 +222,8 @@ server-sentinel-stop: stop-26379 stop-26380 stop-26381 stop-26382
 $(WORK_DIR)/cluster-%.conf:
 	@mkdir -p $(@D)
 	echo port $* >> $@
-	echo protected-mode no >> $@
-	echo bind 0.0.0.0 >> $@
+	echo protected-mode yes >> $@
+	echo bind $(SERVER_BIND) >> $@
 	echo cluster-enabled yes >> $@
 	echo cluster-config-file $(WORK_DIR)/nodes-$*.conf >> $@
 	echo cluster-node-timeout 5 >> $@
@@ -400,12 +405,15 @@ ruby-integration-test: server-standalone-start
 	cd ruby && VALKEY_HOST=localhost VALKEY_PORT=6379 bundle exec rake integration
 	$(MAKE) server-standalone-stop
 
+# Runs from the repo root (no `cd ruby`) so DRIVER/WORKLOAD/METRICS_OUTPUT work
+# as either repo-relative or absolute paths (the matrix runner passes absolute
+# temp paths). BUNDLE_GEMFILE pins the Ruby bundle explicitly.
 ruby-run: ruby-build
-	cd ruby && bundle exec ruby bin/resp-bench \
-		--server $(SERVER) \
-		--driver ../$(DRIVER) \
-		--workload ../$(WORKLOAD) \
-		--metrics ../$(METRICS_OUTPUT)
+	BUNDLE_GEMFILE="$(CURDIR)/ruby/Gemfile" bundle exec ruby ruby/bin/resp-bench \
+		--server "$(SERVER)" \
+		--driver "$(DRIVER)" \
+		--workload "$(WORKLOAD)" \
+		--metrics "$(METRICS_OUTPUT)"
 
 ruby-clean:
 	cd ruby && rm -rf vendor .bundle Gemfile.lock

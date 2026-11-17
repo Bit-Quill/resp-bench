@@ -241,6 +241,17 @@ See [docs/CONFIG_SPECIFICATION.md](docs/CONFIG_SPECIFICATION.md) for full detail
 | `make server-cluster-init` | Initialize cluster (ports 7379-7382) |
 | `make server-stop` | Stop all servers |
 
+The servers these targets start listen on **`127.0.0.1` only**. The address
+comes from `SERVER_BIND`, which defaults to `127.0.0.1`. Every built-in client,
+replica, sentinel, and cluster link uses loopback. Except for the
+password-protected 6382/26382 nodes, the servers have no authentication. Only
+point `SERVER_BIND` at a private address if a client on another host must
+connect: anything that can reach that address gets unauthenticated access.
+
+Generated server configs under `work/` are appended to, not rewritten. If your
+checkout started servers before this default changed, delete `work/*.conf`
+once so they are regenerated.
+
 ## Contributing
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture

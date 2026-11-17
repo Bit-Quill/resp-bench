@@ -58,3 +58,7 @@ nodes-*.conf
 # Temporary files
 *.tmp
 *.temp
+
+# Ruby engine lockfile: generated per run, since VALKEY_GLIDE_RUBY_VERSION
+# selects the valkey-glide-rb version at bundle time (see ruby/Gemfile).
+ruby/Gemfile.lock

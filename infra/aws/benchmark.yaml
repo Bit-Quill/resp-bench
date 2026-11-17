@@ -10,6 +10,10 @@ Description: >-
   only leftover is this stack's free shell (security group + IAM role); remove
   it with `aws cloudformation delete-stack` (see infra/README.md).
 
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Parameters
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +74,41 @@ Parameters:
       Destination S3 bucket. Results land under s3://<bucket>/runs/<JobId>/.
       The instance role is scoped to s3:PutObject on runs/* of this bucket only.
 
+  RubyClientVersion:
+    Type: String
+    Default: "1.0.0"
+    Description: >-
+      Exact valkey-glide-rb gem version installed on the instance (exported as
+      VALKEY_GLIDE_RUBY_VERSION, consumed by ruby/Gemfile). Accepts RubyGems
+      prerelease forms such as 1.1.0.pre.rc2. Only affects matrices that
+      select the valkey-glide-ruby driver.
+    # Dot/hyphen-separated alphanumeric segments only — no spaces, quotes,
+    # shell metacharacters, or slashes, so the value is safe to interpolate
+    # into UserData. Keep in sync with RUBY_CLIENT_VERSION_PATTERN in
+    # bench-aws.sh.
+    AllowedPattern: "^[0-9A-Za-z]+([.-][0-9A-Za-z]+)*$"
+    ConstraintDescription: >-
+      must be a gem version made of dot/hyphen-separated alphanumeric segments
+      (e.g. 1.0.0 or 1.1.0.pre.rc2).
+
+  ResultsPrefix:
+    Type: String
+    Default: ""
+    MaxLength: 512
+    Description: >-
+      S3 key prefix (no trailing slash) the run uploads to, computed by
+      bench-aws.sh: runs/<JobId> by default, or (when --ruby-client-version
+      is passed) runs/ruby/<base>/release/<JobId> for releases and
+      runs/ruby/<base>/rc/<base>-<tag>/<JobId> for prereleases. Empty means
+      runs/<JobId>.
+    # Must stay under runs/ (the only prefix the instance role can write) and
+    # use only safe path segments: each starts with an alphanumeric, so no
+    # empty, "." or ".." segments, spaces, or shell metacharacters.
+    AllowedPattern: "^(runs(/[0-9A-Za-z][0-9A-Za-z._-]*)+)?$"
+    ConstraintDescription: >-
+      must be empty or runs/<segment>[/<segment>...] with alphanumeric-led
+      segments of [0-9A-Za-z._-].
+
   BaseAmiId:
     Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
@@ -83,6 +122,9 @@ Parameters:
     MinValue: 20
     MaxValue: 500
     Description: Root EBS volume size (GiB). Deleted on termination.
+
+Conditions:
+  DefaultResultsPrefix: !Equals [!Ref ResultsPrefix, ""]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Resources
@@ -195,6 +237,10 @@ Resources:
           REGION="${AWS::Region}"
           STACK_NAME="${AWS::StackName}"
           SIGNAL_RESOURCE="BenchmarkInstance"
+          # S3 key prefix for every upload from this box (always under runs/,
+          # enforced by the ResultsPrefix AllowedPattern).
+          RESULTS_PREFIX="${ResultsPrefix}"
+          [ -n "$RESULTS_PREFIX" ] || RESULTS_PREFIX="runs/${JobId}"
 
           # IMDSv2: fetch a token and this instance's id (for signalling +
           # run metadata). This AWS-specific plumbing lives in UserData/the
@@ -209,7 +255,7 @@ Resources:
           # it, so this is the only durable record of a provision-phase failure.
           signal_failure() {
             aws s3 cp /var/log/cloud-init-output.log \
-              "s3://${S3Bucket}/runs/${JobId}/provision-failure.log" \
+              "s3://${S3Bucket}/$RESULTS_PREFIX/provision-failure.log" \
               --region "$REGION" || true
             aws cloudformation signal-resource --region "$REGION" \
               --stack-name "$STACK_NAME" --logical-resource-id "$SIGNAL_RESOURCE" \
@@ -222,6 +268,12 @@ Resources:
           REPO_DIR=/opt/resp-bench
           git clone --depth 1 --branch "${RepoTag}" "${RepoUrl}" "$REPO_DIR"
 
+          # Selected Ruby GLIDE gem version. Exported BEFORE provision.sh (whose
+          # Ruby warm-up runs `bundle install`) and inherited by run-remote.sh
+          # (where `make ruby-run` re-runs ruby-build), so both resolve the same
+          # exact version. AllowedPattern restricts it to safe characters.
+          export VALKEY_GLIDE_RUBY_VERSION="${RubyClientVersion}"
+
           # Cloud-agnostic toolchain install + engine build + cache warm-up.
           export REPO_DIR
           bash "$REPO_DIR/infra/provision.sh"
@@ -231,6 +283,7 @@ Resources:
           trap - ERR
           export JOB_ID="${JobId}"
           export S3_BUCKET="${S3Bucket}"
+          export RESULTS_PREFIX
           export MATRIX_NAME="${MatrixName}"
           export REPO_TAG="${RepoTag}"
           export RUNTIME_CAP_MINUTES="${RuntimeCapMinutes}"
@@ -251,7 +304,14 @@ Outputs:
 
   S3Prefix:
     Description: Where results will appear.
-    Value: !Sub "s3://${S3Bucket}/runs/${JobId}/"
+    Value: !If
+      - DefaultResultsPrefix
+      - !Sub "s3://${S3Bucket}/runs/${JobId}/"
+      - !Sub "s3://${S3Bucket}/${ResultsPrefix}/"
+
+  RubyClientVersion:
+    Description: Requested valkey-glide-rb gem version (only used by Ruby GLIDE matrices).
+    Value: !Ref RubyClientVersion
 
   InstanceId:
     Description: The (self-terminating) benchmark instance.

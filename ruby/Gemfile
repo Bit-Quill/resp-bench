@@ -9,10 +9,22 @@ gem "redis", "~> 5.0"           # redis-rb client
 gem "HDRHistogram", "~> 0.1"    # HdrHistogram for latency metrics
 gem "oj", "~> 3.16"             # Fast JSON serialization
 gem "concurrent-ruby", "~> 1.2" # Thread-safe data structures
+# Former default gems: base64 left the default set in Ruby 3.4 (LoadError under
+# Bundler), logger leaves it in Ruby 4.0. Declared so the engine runs on any
+# Ruby >= 3.0.
+gem "base64", "~> 0.2"
+gem "logger", "~> 1.6"
 
 # valkey-glide-ruby client; supplies the `Valkey` class via `require "valkey"`.
-# Pinned to an exact released version for reproducible benchmark runs.
-gem "valkey-glide-rb", "1.0.0"
+# Always pinned to an EXACT version for reproducible benchmark runs.
+# VALKEY_GLIDE_RUBY_VERSION selects it (e.g. 1.1.0.pre.rc2; the AWS runner sets
+# this from --ruby-client-version). Unset or blank falls back to the default
+# rather than an unconstrained dependency, so results never depend on when
+# Bundler happened to run.
+DEFAULT_VALKEY_GLIDE_RUBY_VERSION = "1.0.0"
+ruby_client_version = ENV.fetch("VALKEY_GLIDE_RUBY_VERSION", "").strip
+ruby_client_version = DEFAULT_VALKEY_GLIDE_RUBY_VERSION if ruby_client_version.empty?
+gem "valkey-glide-rb", "= #{ruby_client_version}"
 
 group :development, :test do
   gem "minitest", "~> 5.0"

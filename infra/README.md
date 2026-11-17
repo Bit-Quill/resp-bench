@@ -107,13 +107,71 @@ infra/aws/bench-aws.sh deploy \
 > `valkey-cli`). That is expected and out of scope here: the run still uploads a
 > diagnosable bundle and self-terminates.
 
-## What lands in S3
+### Selecting a Ruby GLIDE version
+
+`--ruby-client-version <version>` picks the exact `valkey-glide-rb` gem the
+instance installs (default `1.0.0`). It flows through the `RubyClientVersion`
+stack parameter into the instance as `VALKEY_GLIDE_RUBY_VERSION`, which
+`ruby/Gemfile` pins exactly. One run uses one version; to compare versions,
+launch separate runs with the same matrix, instance type, and workload.
 
 ```
-runs/<job_id>/
+infra/aws/bench-aws.sh deploy \
+  --matrix ruby-glide-version-smoke \
+  --ruby-client-version 1.1.0.pre.rc2 \
+  --repo-tag <pushed-branch-or-tag>
+```
+
+- **Use a Ruby matrix.** The option only affects matrices that select the
+  `valkey-glide-ruby` driver (e.g. `ruby-glide-version-smoke`); the default
+  matrix runs Java GLIDE and ignores it.
+- **The `--repo-tag` must contain this feature** (and be pushed to
+  `--repo-url`): the instance clones that ref, so local, uncommitted, or
+  unpushed changes are invisible to it.
+- **Use the RubyGems version string** (`1.1.0.pre.rc2`, not `1.1.0-rc2`). List
+  what's published, prereleases included, with
+  `gem list --remote --all --prerelease valkey-glide-rb`.
+- The value is validated before any AWS call (and again by the template's
+  `AllowedPattern`): dot/hyphen-separated alphanumeric segments only.
+- **Where to confirm it:** each result line in `results/*.ndjson` reports the
+  installed version as `metadata.primary_driver_version`; `run-metadata.json`
+  records `clients.valkey_glide_ruby.requested` and `.resolved` (from
+  `ruby/Gemfile.lock`); the stack outputs include `RubyClientVersion`.
+- **Results are filed by version** when the flag is passed (see below). To file
+  a baseline the same way, pass the default explicitly:
+  `--ruby-client-version 1.0.0`.
+
+Locally, the same variable drives the Ruby engine:
+`VALKEY_GLIDE_RUBY_VERSION=1.1.0.pre.rc2 make ruby-build`.
+
+## What lands in S3
+
+Results go to `runs/<job_id>/`. Runs launched with an explicit
+`--ruby-client-version` go to a version-keyed prefix instead, so all runs of
+one Ruby GLIDE version (and its RCs) sit together:
+
+| `--ruby-client-version` | Prefix |
+|---|---|
+| *(not passed)* | `runs/<job_id>/` |
+| `1.0.0` | `runs/ruby/1.0.0/release/<job_id>/` |
+| `1.1.0.pre.rc2` (or `1.1.0-rc2`) | `runs/ruby/1.1.0/rc/1.1.0-rc2/<job_id>/` |
+| `1.1.0.pre.rc3` | `runs/ruby/1.1.0/rc/1.1.0-rc3/<job_id>/` |
+
+The base version is the leading numeric part; any letter in the version means a
+RubyGems prerelease, which gets its own `<base>-<tag>` folder under `rc/` so
+every run of one RC (including repeats) sits together. `1.1.0.pre.rc2` and
+`1.1.0-rc2` name the same gem and map to the same folder; `run-metadata.json`
+keeps the exact gem version. The prefix always stays under `runs/` (the only
+prefix the instance can write). `deploy` prints the prefix, `run-metadata.json`
+records it as `s3_prefix`, and `bench-aws.sh check <job_id>` finds a run in
+either layout.
+
+```
+<prefix>/
   report.html          # interactive Plotly report (scalability + delta)
   run-metadata.json    # job id, status, matrix, repo tag + git sha, Valkey
-                       #   version, instance type / id / AZ / AMI, region, timing
+                       #   version, Ruby GLIDE requested/resolved version,
+                       #   instance type / id / AZ / AMI, region, timing
   results/             # raw sweep output: *.ndjson, *.system.ndjson, _manifest.json
   graphs/              # generated graph assets
   logs/                # cloud-init-output.log (provision + run log)
