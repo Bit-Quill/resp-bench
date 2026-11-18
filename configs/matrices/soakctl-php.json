@@ -1,0 +1,15 @@
+{
+    "description": "Control soak for soak-php: identical workload with phpredis instead of GLIDE. Launch on its own instance in parallel; a flat control with a rising GLIDE series isolates the growth to GLIDE rather than the engine/harness. Launch with --runtime-cap 780. infra/provision.sh does not install the PHP runtime or the valkey_glide extension yet, so this matrix fails on bench-aws.sh until that block is added; run it locally with make benchmark-matrix.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/soak-standalone-12h.json",
+    "iterations": 1,
+    "cpu_interval": 5,
+    "dimensions": {
+        "connections": [
+            8
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/phpredis.json"
+        ]
+    }
+}

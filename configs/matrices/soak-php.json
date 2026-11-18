@@ -1,0 +1,15 @@
+{
+    "description": "12h memory-stability soak - PHP valkey-glide-php, one cell. There is no bench-aws.sh version flag for this client: the valkey_glide extension is installed on the host, not pinned in the repo. Memory signal: engine process-group RSS sampled every 5s into <label>.system.ndjson. 8 connections = 8 forked worker processes (process-per-connection via pcntl), leaving CPU headroom for the colocated server on an 8-vCPU m5.2xlarge, as in soak-ruby. Launch with --runtime-cap 780 so the cap never fires before the upload; run soakctl-php on its own instance in parallel as the control. infra/provision.sh does not install the PHP runtime or the valkey_glide extension yet, so this matrix fails on bench-aws.sh until that block is added; run it locally with make benchmark-matrix.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/soak-standalone-12h.json",
+    "iterations": 1,
+    "cpu_interval": 5,
+    "dimensions": {
+        "connections": [
+            8
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-php.json"
+        ]
+    }
+}

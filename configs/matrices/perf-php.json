@@ -1,0 +1,18 @@
+{
+    "description": "Performance sweep - PHP: valkey-glide-php vs phpredis (high-throughput configs). There is no bench-aws.sh version flag for this client: the valkey_glide extension is installed on the host, not pinned in the repo. phpredis is the stable yardstick, so compare GLIDE/phpredis ratios across runs to cancel instance-to-instance noise. Connections and iterations match perf-ruby. infra/provision.sh does not install the PHP runtime or the valkey_glide extension yet, so this matrix fails on bench-aws.sh until that block is added; run it locally with make benchmark-matrix.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 3,
+    "dimensions": {
+        "connections": [
+            1,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-php.json",
+            "configs/drivers/high-throughput/phpredis.json"
+        ]
+    }
+}

@@ -1,0 +1,18 @@
+{
+    "description": "Performance sweep - Rust: valkey-glide-rust vs redis-rs (high-throughput configs). There is no bench-aws.sh version flag for this client: GLIDE Rust is a path dependency on a valkey-glide checkout pinned by GLIDE_COMMIT in infra/provision.sh; change that default on a pushed ref and pass --repo-tag. redis-rs is the stable yardstick, so compare GLIDE/redis-rs ratios across runs to cancel instance-to-instance noise. Connections and iterations match perf-ruby.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 3,
+    "dimensions": {
+        "connections": [
+            1,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-rust.json",
+            "configs/drivers/high-throughput/redis-rs.json"
+        ]
+    }
+}

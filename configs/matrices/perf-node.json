@@ -1,0 +1,18 @@
+{
+    "description": "Performance sweep - Node.js: valkey-glide-node vs ioredis (high-throughput configs). There is no bench-aws.sh version flag for this client: bump @valkey/valkey-glide in node/package.json and node/package-lock.json on a pushed ref and pass --repo-tag. ioredis is the stable yardstick, so compare GLIDE/ioredis ratios across runs to cancel instance-to-instance noise. Connections and iterations match perf-ruby.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/basic-standalone-single-client-1M-reqs.json",
+    "iterations": 3,
+    "dimensions": {
+        "connections": [
+            1,
+            4,
+            8,
+            16
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-node.json",
+            "configs/drivers/high-throughput/ioredis.json"
+        ]
+    }
+}
