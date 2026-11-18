@@ -1,0 +1,15 @@
+{
+    "description": "12h memory-stability soak - Go valkey-glide-go, one cell. There is no bench-aws.sh version flag for this client: bump github.com/valkey-io/valkey-glide/go/v2 in go/go.mod (and go.sum) on a pushed ref and pass --repo-tag. Memory signal: engine process-group RSS sampled every 5s into <label>.system.ndjson. 64 connections = 64 goroutines, one client each; goroutines are cheap, so this loads GLIDE without oversubscribing the 8-vCPU m5.2xlarge shared with the colocated server. Launch with --runtime-cap 780 so the cap never fires before the upload; run soakctl-go on its own instance in parallel as the control. infra/provision.sh does not install the Go toolchain yet, so this matrix fails on bench-aws.sh until that block is added; run it locally with make benchmark-matrix.",
+    "x_axis": "connections",
+    "workload_template": "configs/workloads/reference/soak-standalone-12h.json",
+    "iterations": 1,
+    "cpu_interval": 5,
+    "dimensions": {
+        "connections": [
+            64
+        ],
+        "driver_config": [
+            "configs/drivers/high-throughput/valkey-glide-go.json"
+        ]
+    }
+}
